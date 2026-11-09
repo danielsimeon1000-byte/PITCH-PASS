@@ -1,0 +1,133 @@
+// Audio: reference tones, microphone, pitch detection.
+export const NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+export const midiToHz = m => 440 * Math.pow(2, (m - 69) / 12);
+export const hzToMidi = f => 69 + 12 * Math.log2(f / 440);
+export const noteName = m => { const r = Math.round(m); return NAMES[((r % 12) + 12) % 12] + (Math.floor(r / 12) - 1); };
+
+let ac = null, analyser = null, buf = null, stream = null;
+let toneUntil = 0;
+export const state = { micOn: false, touchMode: false };
+
+export function ctx(){
+  if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+  if (ac.state === 'suspended') ac.resume();
+  return ac;
+}
+
+function voice(midi, start, len, vol){
+  const a = ctx();
+  const o1 = a.createOscillator(), o2 = a.createOscillator(), g = a.createGain(), g2 = a.createGain();
+  o1.type = 'triangle'; o2.type = 'sine';
+  o1.frequency.value = midiToHz(midi); o2.frequency.value = midiToHz(midi) * 2;
+  g2.gain.value = 0.18;
+  o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(a.destination);
+  const rel = Math.min(0.25, len * 0.4);
+  g.gain.setValueAtTime(0, start);
+  g.gain.linearRampToValueAtTime(vol, start + 0.02);
+  g.gain.setValueAtTime(vol, start + Math.max(0.03, len - rel));
+  g.gain.exponentialRampToValueAtTime(0.0001, start + len);
+  o1.start(start); o2.start(start); o1.stop(start + len + 0.05); o2.stop(start + len + 0.05);
+}
+
+// Play notes back to back. Returns duration in seconds. The mic is ignored while it plays.
+export function playPhrase(notes, each, vol = 0.35){
+  const a = ctx();
+  const t = a.currentTime + 0.03;
+  notes.forEach((m, i) => voice(m, t + i * each, each * (notes.length > 1 ? 0.95 : 1), vol));
+  const dur = notes.length * each;
+  toneUntil = performance.now() + dur * 1000 + 150;
+  return dur;
+}
+export const isPlaying = () => performance.now() < toneUntil;
+
+export function blip(kind){
+  const a = ctx(); const t = a.currentTime;
+  const seq = kind === 'ok' ? [[84,0],[91,0.08]] : kind === 'big' ? [[79,0],[84,0.08],[91,0.16]] : [[40,0]];
+  seq.forEach(([m, d]) => {
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = kind === 'bad' ? 'square' : 'sine';
+    o.frequency.value = midiToHz(m);
+    g.gain.setValueAtTime(0, t + d);
+    g.gain.linearRampToValueAtTime(kind === 'bad' ? 0.06 : 0.12, t + d + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.18);
+    o.connect(g); g.connect(a.destination); o.start(t + d); o.stop(t + d + 0.3);
+  });
+}
+
+export async function startMic(){
+  if (state.micOn) return true;
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('no-api');
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    const a = ctx();
+    const src = a.createMediaStreamSource(stream);
+    analyser = a.createAnalyser(); analyser.fftSize = 2048;
+    buf = new Float32Array(analyser.fftSize);
+    src.connect(analyser);
+    state.micOn = true; state.touchMode = false;
+    return true;
+  } catch (e) {
+    console.warn('mic failed', e);
+    state.micOn = false;
+    return false;
+  }
+}
+
+// Autocorrelation pitch detection for the singing range (70 to 1100 Hz).
+// Picks the earliest strong peak to avoid octave-down errors.
+export function detectPitch(){
+  if (!analyser || isPlaying()) return -1;
+  analyser.getFloatTimeDomainData(buf);
+  const sr = ac.sampleRate; let n = buf.length, rms = 0;
+  for (let i = 0; i < n; i++) rms += buf[i] * buf[i];
+  rms = Math.sqrt(rms / n);
+  if (rms < 0.01) return -1;
+  let r1 = 0, r2 = n - 1; const th = 0.2;
+  for (let i = 0; i < n / 2; i++) if (Math.abs(buf[i]) < th) { r1 = i; break; }
+  for (let i = 1; i < n / 2; i++) if (Math.abs(buf[n - i]) < th) { r2 = n - i; break; }
+  const b = buf.subarray(r1, r2); n = b.length;
+  const minLag = Math.floor(sr / 1100), maxLag = Math.min(n - 2, Math.ceil(sr / 70));
+  if (maxLag <= minLag + 2) return -1;
+  const c = new Float32Array(maxLag + 2);
+  for (let lag = 0; lag <= maxLag + 1; lag++) {
+    let s = 0; for (let j = 0; j < n - lag; j++) s += b[j] * b[j + lag]; c[lag] = s;
+  }
+  let d = 0; while (d < maxLag && c[d] > c[d + 1]) d++;
+  let best = -1;
+  for (let i = Math.max(d, minLag); i <= maxLag; i++) if (c[i] > best) best = c[i];
+  if (best < c[0] * 0.3) return -1;
+  let pos = -1;
+  for (let i = Math.max(d, minLag) + 1; i <= maxLag; i++) {
+    if (c[i] >= best * 0.9 && c[i] >= c[i - 1] && c[i] >= c[i + 1]) { pos = i; break; }
+  }
+  if (pos <= 0) return -1;
+  const x1 = c[pos - 1], x2 = c[pos], x3 = c[pos + 1];
+  const a2 = (x1 + x3 - 2 * x2) / 2, b2 = (x3 - x1) / 2;
+  const T0 = a2 ? pos - b2 / (2 * a2) : pos;
+  return sr / T0;
+}
+
+// Smooths raw detections into a steady reading. fold: target midi to fold octaves toward.
+export class PitchTracker {
+  constructor(){ this.recent = []; this.value = null; this.at = 0; this.raw = null; this.frame = 0; }
+  update(now, dt, fold, fast = false){
+    this.frame++;
+    if (state.micOn && (fast || this.frame % 2 === 0)) {
+      const f = detectPitch();
+      if (f > 0) {
+        let m = hzToMidi(f);
+        if (fold != null) { while (m - fold > 6) m -= 12; while (fold - m > 6) m += 12; }
+        this.recent.push(m); if (this.recent.length > (fast ? 3 : 5)) this.recent.shift();
+        this.raw = [...this.recent].sort((a, b) => a - b)[this.recent.length >> 1];
+        this.at = now;
+      } else if (now - this.at > 200) this.recent = [];
+    }
+    if (this.raw != null && this.live(now)) {
+      this.value = this.value == null ? this.raw : this.value + (this.raw - this.value) * Math.min(1, dt * (fast ? 24 : 14));
+    }
+    return this.live(now) ? this.value : null;
+  }
+  setTouch(m, now){ this.raw = m; this.at = now; }
+  live(now){ return this.raw != null && now - this.at < 300; }
+  reset(){ this.recent = []; this.value = null; this.raw = null; this.at = 0; }
+}

@@ -1,0 +1,8 @@
+{
+  "appId": "com.simeondaniel.pitchpass",
+  "appName": "Pitch Pass",
+  "webDir": "www",
+  "backgroundColor": "#140f1f",
+  "android": { "backgroundColor": "#140f1f" },
+  "ios": { "backgroundColor": "#140f1f", "contentInset": "never" }
+}
