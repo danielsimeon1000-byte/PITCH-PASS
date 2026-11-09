@@ -54,6 +54,36 @@ export function blip(kind){
   });
 }
 
+// Reward chime on the note just sung, an octave up. Perfect adds a little arpeggio.
+export function chime(midi, grade){
+  const a = ctx(), t = a.currentTime;
+  const notes = grade === 'perfect' ? [0, 4, 7, 12] : grade === 'great' ? [0, 7] : [0];
+  notes.forEach((iv, i) => {
+    const o = a.createOscillator(), o2 = a.createOscillator(), g = a.createGain();
+    o.type = 'sine'; o2.type = 'triangle';
+    const f = midiToHz(midi + 12 + iv); o.frequency.value = f; o2.frequency.value = f * 2;
+    const g2 = a.createGain(); g2.gain.value = 0.25;
+    o.connect(g); o2.connect(g2); g2.connect(g); g.connect(a.destination);
+    const st = t + i * 0.07;
+    g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(0.16, st + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, st + 0.45);
+    o.start(st); o2.start(st); o.stop(st + 0.5); o2.stop(st + 0.5);
+  });
+}
+export function thud(){
+  const a = ctx(), t = a.currentTime;
+  const o = a.createOscillator(), g = a.createGain();
+  o.type = 'sine'; o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(55, t + 0.18);
+  g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+  o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + 0.25);
+}
+export function haptic(kind){
+  try {
+    const H = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Haptics;
+    if (H) { kind === 'miss' ? H.notification({ type: 'ERROR' }) : H.impact({ style: kind === 'perfect' ? 'HEAVY' : 'LIGHT' }); return; }
+    if (navigator.vibrate) navigator.vibrate(kind === 'miss' ? [40, 40, 60] : kind === 'perfect' ? [25, 30, 25] : 15);
+  } catch (e) {}
+}
+
 export async function startMic(){
   if (state.micOn) return true;
   try {

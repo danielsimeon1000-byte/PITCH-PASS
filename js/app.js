@@ -317,8 +317,8 @@ screens.game = ({ lesson }) => {
   return { html: `<div class="game-top">
       <button class="icon-btn" id="quit" aria-label="Quit lesson">${I.x}</button>
       <div class="progress" id="prog">${Array.from({ length: segs }, (_, i) => `<i class="${i === 0 ? 'now' : ''}"></i>`).join('')}</div>
-      <span class="row" style="gap:4px;font-weight:700">${I.flame}<span id="streak">0</span></span>
     </div>
+    <div class="hud"><span class="score" id="score">0</span><span class="combo" id="combo" hidden>×2</span><span class="grow"></span><span class="row" style="gap:4px;font-weight:700">${I.flame}<span id="streak">0</span></span></div>
     ${A.state.touchMode ? `<div class="banner">${S.inputMode === 'touch' ? 'Touch mode: drag up and down to move the ball. Switch to the mic in Settings.' : "Mic isn't available, so drag up and down to move the ball. Allow the microphone in your browser or phone settings to sing."}</div>` : ''}
     <div class="stage">
       <canvas id="cv"></canvas>
@@ -331,16 +331,22 @@ screens.game = ({ lesson }) => {
       <button class="btn secondary" id="pause">${I.pause} Pause</button>
     </div>`, mount(root){
     const $ = s => root.querySelector(s);
-    let streak = 0;
     const segOf = i => Math.floor(i * segs / total);
+    let shown = 0;
+    const countUp = target => { const el = $('#score'); const step = () => { shown = Math.min(target, shown + Math.max(5, Math.ceil((target - shown) / 6))); el.textContent = shown.toLocaleString(); if (shown < target) requestAnimationFrame(step); }; step(); };
     const g = new Game($('#cv'), {
       base: S.base, tol: S.tol, phrases, blind: !!lesson.blind,
       tunerEl: $('#tuner'), phaseEl: $('#phase'), toastEl: $('#toast'),
-      onWall(i, hit){
-        streak = hit ? streak + 1 : 0; $('#streak').textContent = streak;
+      onWall(i, info){
         const bars = $('#prog').children, k = segOf(i), kn = segOf(i + 1);
-        if (bars[k]) bars[k].className = hit ? 'hit' : 'miss';
+        if (bars[k]) bars[k].className = !info.hit ? 'miss' : !info.firstTry ? 'second' : info.grade === 'perfect' ? 'perfect' : 'hit';
         if (kn !== k && bars[kn]) bars[kn].className = 'now';
+      },
+      onScore(score, combo){
+        countUp(score);
+        $('#streak').textContent = combo;
+        const m = combo >= 10 ? 4 : combo >= 6 ? 3 : combo >= 3 ? 2 : 1, el = $('#combo');
+        el.hidden = m < 2; if (m >= 2 && el.textContent !== `×${m} combo`) { el.textContent = `×${m} combo`; el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
       },
       onEnd(results, extra){ go('results', { lesson, results, extra }); },
     });
@@ -353,30 +359,38 @@ screens.game = ({ lesson }) => {
 
 // ---------- results ----------
 screens.results = ({ lesson, results, extra }) => {
-  const xp = Math.round(extra.score);
+  const xp = Math.round(extra.score / 10);
   const r = recordSession(lesson.id, results, xp);
+  const count = g => results.filter(w => w.grade === g).length;
+  const perfect = count('perfect'), great = count('great'), good = count('good'), second = count('second'), missed = results.filter(w => !w.passed).length;
+  const stars = r.acc >= 95 ? 3 : r.acc >= 80 ? 2 : r.acc >= 60 ? 1 : 0;
   const bySemi = {};
-  results.forEach(w => { const b = bySemi[w.semi] || (bySemi[w.semi] = { hits: 0, n: 0, c: [], }); b.n++; if (w.hit) b.hits++; if (w.heard && w.cents != null) b.c.push(w.cents); });
+  results.forEach(w => { const b = bySemi[w.semi] || (bySemi[w.semi] = { hits: 0, n: 0, c: [] }); b.n++; if (w.hit) b.hits++; if (w.heard && w.cents != null) b.c.push(w.cents); });
   const chips = Object.keys(bySemi).map(Number).sort((a, b) => a - b).map(s => { const b = bySemi[s]; const avg = b.c.length ? Math.round(b.c.reduce((x, y) => x + y, 0) / b.c.length) : null; return { s, miss: b.hits / b.n < 0.5, avg }; });
   const worst = chips.filter(c => c.miss).sort((a, b) => Math.abs(b.avg || 999) - Math.abs(a.avg || 999))[0];
-  let tip = 'Clean work. Try a faster lesson or a smaller hole size in Settings.';
-  if (r.tries && results.filter(w => !w.heard).length > r.tries / 3) tip = "A lot of walls passed without hearing you. Sing as soon as the reference note stops, and keep going until the wall passes the ball.";
-  else if (worst && worst.avg != null) tip = `${SOLF[worst.s]} gave you the most trouble: you were ${Math.abs(worst.avg)} cents ${worst.avg > 0 ? 'sharp. Aim a little lower than feels right.' : 'flat. Lift it a little and keep your breath steady.'}`;
+  let tip = perfect >= results.length * 0.6 ? 'Mostly perfects. Try the Trained hole size in Settings to sharpen up further.' : 'Clean work. Aim for Perfect: land in the middle of the note within 8 cents.';
+  if (r.tries && results.filter(w => !w.heard).length > r.tries / 3) tip = 'Several walls went by without hearing you. Start singing as soon as the reference note stops and hold until the ring fills.';
+  else if (worst && worst.avg != null && Math.abs(worst.avg) <= S.tol) tip = `${SOLF[worst.s]} took a second try. You had the pitch, just lock it in before the wall reaches the ball.`;
+  else if (worst && worst.avg != null) tip = `${SOLF[worst.s]} gave you the most trouble: about ${Math.abs(worst.avg)} cents ${worst.avg > 0 ? 'sharp. Aim a little lower than feels right.' : 'flat. Lift it a little and keep your breath steady.'}`;
   else if (Math.abs(r.cents) >= 15) tip = `Overall you sing ${r.cents > 0 ? 'sharp' : 'flat'} by about ${Math.abs(r.cents)} cents. ${r.cents > 0 ? 'Relax and aim slightly lower.' : 'Support the note and aim slightly higher.'}`;
   const nx = lesson.id === 'daily' ? null : nextAfter(lesson.id);
   const passed = r.acc >= 60;
+  const star = on => `<svg aria-hidden="true" width="44" height="44" viewBox="0 0 24 24" fill="${on ? '#ffd166' : 'none'}" stroke="${on ? '#ffd166' : '#3a2f58'}" stroke-width="1.6" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>`;
   return { html: `<div class="screen">
-    <div class="col" style="align-items:center;gap:6px;text-align:center;margin-top:12px">
-      <span class="eyebrow" style="color:${passed ? 'var(--good)' : 'var(--warn)'}">${passed ? 'Lesson complete' : 'Keep practising'}</span>
-      <h1 style="font-size:30px">${esc(lesson.title)}</h1>
+    <div class="col" style="align-items:center;gap:6px;text-align:center;margin-top:8px">
+      <span class="eyebrow" style="color:${passed ? 'var(--good)' : 'var(--warn)'}">${stars === 3 ? 'Flawless' : passed ? 'Lesson complete' : 'Keep practising'}</span>
+      <h1 style="font-size:28px">${esc(lesson.title)}</h1>
+      <div class="stars">${[0, 1, 2].map(i => `<span class="${i < stars ? 'on' : ''}" style="animation-delay:${0.25 + i * 0.25}s">${star(i < stars)}</span>`).join('')}</div>
     </div>
-    <div class="card col" style="align-items:center;gap:4px;padding:24px 0;border-radius:24px">
-      <span class="big">${r.acc}<span style="font-size:36px;color:var(--muted)">%</span></span>
-      <span class="muted" style="font-size:15px">${r.hits} of ${r.tries} walls passed</span>
-      <div class="row" style="gap:22px;margin-top:14px">
-        <div class="col" style="align-items:center;gap:0"><b style="font-size:20px">${r.cents > 0 ? '+' : ''}${r.cents}c</b><span class="small muted">avg off</span></div>
-        <div class="col" style="align-items:center;gap:0"><b style="font-size:20px">${extra.bestStreak}</b><span class="small muted">best streak</span></div>
-        <div class="col" style="align-items:center;gap:0"><b style="font-size:20px;color:var(--accent)">+${xp}</b><span class="small muted">XP</span></div>
+    <div class="card col" style="align-items:center;gap:4px;padding:20px 0;border-radius:24px">
+      <span class="big" id="bigScore">0</span>
+      <span class="muted" style="font-size:15px">${r.acc}% first try · best combo ${extra.bestCombo}</span>
+      <div class="grades">
+        <div><b style="color:#ffd166">${perfect}</b><span>Perfect</span></div>
+        <div><b style="color:#5ee39b">${great}</b><span>Great</span></div>
+        <div><b style="color:#9fd8ff">${good}</b><span>Good</span></div>
+        <div><b style="color:#ffb070">${second}</b><span>2nd try</span></div>
+        <div><b style="color:#ff6b78">${missed}</b><span>Missed</span></div>
       </div>
     </div>
     <div class="col"><span class="eyebrow">Note by note</span>
@@ -391,9 +405,25 @@ screens.results = ({ lesson, results, extra }) => {
   </div>`, mount(root){
     const n = root.querySelector('#next'); if (n) n.onclick = () => startLesson(nx);
     root.querySelector('#again').onclick = () => startLesson(lesson);
-    A.blip(passed ? 'big' : 'ok');
+    const el = root.querySelector('#bigScore'); let v = 0; const target = extra.score;
+    const tick = () => { v = Math.min(target, v + Math.max(7, Math.ceil(target / 45))); el.textContent = v.toLocaleString(); if (v < target) requestAnimationFrame(tick); };
+    tick();
+    for (let i = 0; i < stars; i++) setTimeout(() => { A.chime(72 + i * 4, i === 2 ? 'perfect' : 'great'); A.haptic(i === 2 ? 'perfect' : 'hit'); }, 300 + i * 250);
+    if (!stars) A.blip('ok');
+    if (stars === 3) confetti(root);
   }};
 };
+function confetti(root){
+  const cv = document.createElement('canvas'); cv.className = 'confetti'; root.appendChild(cv);
+  const W = cv.width = root.clientWidth, H = cv.height = root.clientHeight, c = cv.getContext('2d');
+  const cols = ['#ffd166', '#ff8a2a', '#5ee39b', '#9fd8ff', '#f6efe4'];
+  const ps = Array.from({ length: 120 }, () => ({ x: Math.random() * W, y: -20 - Math.random() * H * 0.5, vx: (Math.random() - .5) * 60, vy: 120 + Math.random() * 160, r: Math.random() * 6, w: 4 + Math.random() * 5, col: cols[Math.floor(Math.random() * cols.length)] }));
+  let last = performance.now(), t0 = last;
+  const f = now => { const dt = Math.min(0.05, (now - last) / 1000); last = now; c.clearRect(0, 0, W, H);
+    ps.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; p.r += dt * 6; c.save(); c.translate(p.x, p.y); c.rotate(p.r); c.fillStyle = p.col; c.fillRect(-p.w / 2, -2, p.w, 4); c.restore(); });
+    if (now - t0 < 3500) requestAnimationFrame(f); else cv.remove(); };
+  requestAnimationFrame(f);
+}
 
 // ---------- drills ----------
 screens.drill = ({ lesson }) => {
