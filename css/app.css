@@ -15,6 +15,12 @@ button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
 a{color:var(--accent-soft)}
 #app{position:fixed;inset:0;display:flex;flex-direction:column;max-width:520px;margin:0 auto}
 .screen{flex:1;display:flex;flex-direction:column;min-height:0;padding:calc(20px + var(--sat)) 20px calc(20px + var(--sab));gap:16px;overflow-y:auto;animation:fade .22s ease}
+/* A screen scrolls; its cards keep the height their content needs. Without this,
+   any card with overflow:hidden gets an implicit min-height:0 and the column
+   squashes it instead of scrolling — on a 693px viewport the session card went
+   from 238px to 80px and swallowed its own button. Flexible children (.grow,
+   .stage) set flex:1 further down and win on order. */
+.screen > *{flex-shrink:0}
 .screen.tabbed{padding-bottom:12px}
 .screen.flush{padding-left:0;padding-right:0}
 @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
@@ -81,9 +87,16 @@ h1.xl{font-size:40px;line-height:1.02;letter-spacing:-.035em}
 .hbar span:last-child{width:38px;text-align:right;font-size:12.5px;color:var(--muted)}
 .daily{position:relative;border-radius:24px;background:var(--accent);color:var(--accent-ink);padding:20px;display:flex;flex-direction:column;gap:14px;overflow:hidden;text-align:left}
 .daily .w1,.daily .w2{position:absolute;right:22px;width:46px;border-radius:10px;background:var(--wood)}
-.daily .w1{top:-8px;height:64px}.daily .w2{top:98px;height:140px}
+/* The lower slab is anchored to the card's bottom, not given a fixed height, so
+   the hole stays put however tall the copy makes the card. */
+.daily .w1{top:-8px;height:64px}.daily .w2{top:98px;bottom:-10px}
+.daily .wb{position:absolute;right:31px;top:65px;width:28px;height:28px;border-radius:50%;
+  background:radial-gradient(circle at 34% 30%,#fff,#f3e6d2 62%,#d8c3a3);
+  box-shadow:0 3px 10px rgba(27,15,4,.28);animation:bob 3.4s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateX(0)}50%{transform:translateX(-7px)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}}
 .daily .play{align-self:flex-start;display:flex;align-items:center;gap:8px;height:46px;padding:0 20px;border-radius:14px;background:var(--accent-ink);color:var(--ink);font-weight:700;font-size:15px}
-.hero{position:relative;height:340px;border-radius:28px;background:var(--s1);border:1px solid var(--line);overflow:hidden;flex-shrink:0}
+.hero{position:relative;height:340px;height:min(340px,46svh);border-radius:28px;background:var(--s1);border:1px solid var(--line);overflow:hidden;flex-shrink:0}
 .hero .lane{position:absolute;left:24px;right:24px;border-top:1px dashed rgba(255,255,255,.12)}
 .hero .wt,.hero .wb{position:absolute;left:58%;width:74px;border-radius:12px;background:var(--wood)}
 .hero .wt{top:-10px;height:140px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:12px;font-weight:800;font-size:24px;color:#fff}
@@ -128,7 +141,7 @@ h1.xl{font-size:40px;line-height:1.02;letter-spacing:-.035em}
 .notegrid b{font-size:16px}.notegrid span{font-size:12px;color:var(--good)}
 .notegrid div.miss span{color:#ff9aa3}
 .big{font-weight:800;font-size:72px;line-height:1;letter-spacing:-.04em}
-.drill-stage{position:relative;height:320px;border-radius:24px;background:var(--s1);border:1px solid var(--line);overflow:hidden;flex-shrink:0}
+.drill-stage{position:relative;height:320px;height:min(320px,42svh);border-radius:24px;background:var(--s1);border:1px solid var(--line);overflow:hidden;flex-shrink:0}
 .drill-stage canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
 .drill-stage .status{position:absolute;left:14px;top:14px;font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--good)}
 .metric b{font-size:22px}.metric small{font-size:13px;color:var(--muted)}

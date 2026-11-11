@@ -292,7 +292,7 @@ screens.home = () => {
     ${ch ? `<button class="card row challenge" id="chal"><div class="col grow" style="gap:2px"><b>A friend challenged you</b><span class="small muted">${esc(ch.title)} · beat ${ch.score.toLocaleString()}</span></div>${I.chev}</button>` : ''}
 
     <button class="daily" id="session">
-      <span class="w1"></span><span class="w2"></span>
+      <span class="w1"></span><span class="w2"></span><span class="wb"></span>
       <span class="eyebrow" style="color:var(--accent-ink)">Today's session</span>
       <span class="col" style="gap:4px;max-width:220px"><span style="font-weight:800;font-size:26px;line-height:1.05;letter-spacing:-.02em">${stageDone === 4 ? 'Session done' : stageDone ? `${4 - stageDone} stage${4 - stageDone > 1 ? 's' : ''} left` : 'Warm up, then sing'}</span><span style="font-size:14px;opacity:.82">${stageDone === 4 ? 'Come back tomorrow, or play a lesson for fun.' : 'Warm up, ear, agility, control. About 14 minutes.'}</span></span>
       <span class="stagedots">${STAGES.map(x => `<i class="${done[x.key] ? 'on' : ''}"></i>`).join('')}</span>
