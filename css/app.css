@@ -177,3 +177,7 @@ h1.xl{font-size:40px;line-height:1.02;letter-spacing:-.035em}
 .sharecard{width:100%;border-radius:16px;display:block}
 .tile .eyebrow{font-size:10.5px}
 .bars .val{font-size:10px;color:var(--muted);font-weight:700;height:12px}
+.chordbadge{position:absolute;left:12px;right:12px;bottom:12px;display:flex;flex-direction:column;align-items:center;gap:1px;padding:7px 16px;border-radius:14px;background:rgba(42,33,64,.94);border:1px solid rgba(255,138,42,.4);z-index:3;text-align:center;flex-direction:row;justify-content:center;gap:8px;align-items:baseline;border-left:3px solid var(--accent)}
+.chordbadge b{font-size:14px}
+.chordbadge span{font-size:12px;color:var(--muted)}
+.item .end{text-transform:uppercase;letter-spacing:.1em;font-size:10.5px}

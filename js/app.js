@@ -2,9 +2,9 @@
 import * as A from './audio.js';
 import { S, save, reset, dayKey, streakNow, recordSession, recordHold, stats, weekBars,
          addMinutes, minutesToday, markStage, stagesToday, logRange } from './store.js';
-import { UNITS, STUDIO, TECHNIQUE, SOLF, SCALE, findLesson, dailyLesson, buildPhrases } from './content.js';
+import { UNITS, STUDIO, TECHNIQUE, CHORD_LAB, SOLF, SCALE, solf, findLesson, dailyLesson, buildPhrases } from './content.js';
 import { Game } from './game.js';
-import { HoldDrill, SlideDrill } from './drill.js';
+import { HoldDrill, SlideDrill, HarmonyDrill } from './drill.js';
 import { WARMUPS, STAGES, liveCue, diagnose, healthNote, isWarm } from './coach.js';
 import * as M from './meta.js';
 import { ALLOW_PRO_PREVIEW, PRIVACY_URL } from './config.js';
@@ -95,13 +95,13 @@ async function ensureInput(){
   return ok;
 }
 
-const screenFor = l => l.type === 'hold' ? 'drill' : l.type === 'slide' ? 'slide' : 'game';
+const screenFor = l => l.type === 'hold' ? 'drill' : l.type === 'slide' ? 'slide' : l.type === 'harmony' ? 'harmony' : 'game';
 
 function startLesson(lesson, opts = {}){
   if (!lessonOpen(lesson)) return go('paywall');
   A.ctx();
   // a coach does not let you run scales on a cold voice
-  const needsWarm = lesson.unit.id === 'studio' || lesson.unit.id === 'tech';
+  const needsWarm = lesson.unit.id === 'studio' || lesson.unit.id === 'tech' || lesson.unit.id === 'chords';
   if (needsWarm && !isWarm(S.lastWarmup) && !opts.skipWarm) {
     return sheet(`<h1 style="font-size:24px">Warm up first</h1><p class="muted" style="line-height:1.45">Runs and held notes on a cold voice is how people end up hoarse. Two minutes of trills and you will hit more of them anyway.</p>
       <button class="btn primary" id="warm">Two minute warm-up</button><button class="btn ghost" id="skip">Skip it this once</button>`,
@@ -118,7 +118,7 @@ function timeSpent(startedAt){ const secs = (performance.now() - startedAt) / 10
 function stageOf(lesson){
   if (lesson.warmup) return 'warmup';
   if (lesson.type === 'run') return 'agility';
-  if (lesson.type === 'hold') return 'control';
+  if (lesson.type === 'hold' || lesson.type === 'harmony') return 'control';
   return 'ear';
 }
 
@@ -396,6 +396,11 @@ screens.studio = () => {
     <div class="list">${STUDIO.map((l, i) => { const done = S.done[l.id], next = l === firstOpen; return `<button class="item ${next ? 'next' : ''}" data-lesson="${l.id}">
       <span class="badge ${done && !next ? 'done' : ''}">${done && !next ? I.check : next ? I.play : i + 1}</span>
       <span class="col grow" style="gap:1px"><b>${esc(l.title)}</b><span class="sub">${done ? `Best ${S.best[l.id]}%` : esc(l.sub)}</span></span><span class="end" style="color:var(--accent-soft)">${l.bpm} bpm</span></button>`; }).join('')}</div>
+    <div class="row between" style="margin-top:6px"><b style="font-size:17px">Chord lab</b><span class="small muted">${CHORD_LAB.filter(l => S.done[l.id]).length} of ${CHORD_LAB.length}</span></div>
+    <div class="list">${CHORD_LAB.map((l, i) => { const done = S.done[l.id]; return `<button class="item" data-lesson="${l.id}">
+      <span class="badge ${done ? 'done' : ''}">${done ? I.check : i + 1}</span>
+      <span class="col grow" style="gap:1px"><b>${esc(l.title)}</b><span class="sub">${done ? `Best ${S.best[l.id]}%` : esc(l.sub)}</span></span>
+      <span class="end">${l.type === 'harmony' ? 'hold' : l.type === 'tone' ? 'ear' : 'arp'}</span></button>`; }).join('')}</div>
     <b style="font-size:17px;margin-top:6px">Vocal technique</b>
     <div class="grid2">${TECHNIQUE.map(t => `<button class="tile ${t.soon ? 'soon' : ''}" ${t.soon ? 'disabled' : `data-lesson="${t.id}"`}>${{ tv: I.wave, ts: I.flat, tsl: I.slide, tl: I.leap }[t.id]}<b>${t.title}</b><span>${t.soon ? 'Coming soon' : S.best[t.id] != null ? `Best ${S.best[t.id]}%` : t.sub}</span></button>`).join('')}</div>
   </div>${tabbar('studio')}`, mount(root){
@@ -420,6 +425,7 @@ screens.game = ({ lesson }) => {
       <div class="phase" id="phase"></div>
       <div class="toast" id="toast"></div>
       <div class="cue" id="cue" hidden></div>
+      <div class="chordbadge" id="chordBadge" hidden></div>
     </div>
     <div class="game-bottom">
       <button class="btn secondary" id="hear">${I.speaker} Hear again</button>
@@ -430,13 +436,15 @@ screens.game = ({ lesson }) => {
     const startedAt = performance.now();
     let lastCue = null, cueT = 0;
     const showCue = text => {
-      const el = $('#cue'); el.textContent = text; el.hidden = false;
-      clearTimeout(cueT); cueT = setTimeout(() => { el.hidden = true; }, 4200);
+      const el = $('#cue'), badge = $('#chordBadge');
+      el.textContent = text; el.hidden = false;
+      const hadBadge = !badge.hidden; badge.hidden = true;
+      clearTimeout(cueT); cueT = setTimeout(() => { el.hidden = true; if (hadBadge) badge.hidden = false; }, 4200);
     };
     let shown = 0;
     const countUp = target => { const el = $('#score'); const step = () => { shown = Math.min(target, shown + Math.max(5, Math.ceil((target - shown) / 6))); el.textContent = shown.toLocaleString(); if (shown < target) requestAnimationFrame(step); }; step(); };
     const g = new Game($('#cv'), {
-      base: S.base, tol: S.tol, phrases, blind: !!lesson.blind,
+      base: S.base, tol: S.tol, phrases, blind: !!lesson.blind, syl: lesson.syl,
       tunerEl: $('#tuner'), phaseEl: $('#phase'), toastEl: $('#toast'),
       onWall(i, info){
         // the coach only speaks when the same mistake has become a pattern
@@ -452,6 +460,12 @@ screens.game = ({ lesson }) => {
         const m = combo >= 10 ? 4 : combo >= 6 ? 3 : combo >= 3 ? 2 : 1, el = $('#combo');
         el.hidden = m < 2; if (m >= 2 && el.textContent !== `×${m} combo`) { el.textContent = `×${m} combo`; el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
       },
+      onPhrase(ph){
+        const el = $('#chordBadge');
+        if (!ph.chordName) { el.hidden = true; return; }
+        el.hidden = false;
+        el.innerHTML = ph.ask ? `<b>${esc(ph.chordName)}</b><span>sing the ${esc(ph.ask)}</span>` : `<b>${esc(ph.chordName)}</b><span>sing it up and back down</span>`;
+      },
       onEnd(results, extra){ timeSpent(startedAt); markStage(stageOf(lesson)); go('results', { lesson, results, extra }); },
     });
     window.__pp.game = g;
@@ -465,7 +479,9 @@ screens.game = ({ lesson }) => {
 // ---------- results ----------
 screens.results = ({ lesson, results, extra }) => {
   const xpBefore = S.xp, lvBefore = M.level(xpBefore).level;
-  const xp = Math.round(extra.score / 10);
+  // XP tracks work and accuracy, not raw score: a 45 wall arpeggio should not be
+  // worth more than a whole unit just because it has more walls in it.
+  const xp = Math.min(400, Math.round(results.length * 4 + (results.filter(w => w.hit).length / Math.max(1, results.length)) * 60));
   const r = recordSession(lesson.id, results, xp);
   const lvAfter = M.level().level, levelled = lvAfter > lvBefore;
   const count = g => results.filter(w => w.grade === g).length;
@@ -501,7 +517,7 @@ screens.results = ({ lesson, results, extra }) => {
     </div>
     ${levelled ? `<div class="levelup"><b>Level ${lvAfter}</b><span>${M.level().rank}</span></div>` : ''}
     <div class="col"><span class="eyebrow">Note by note</span>
-      <div class="notegrid">${chips.map(c => `<div class="${c.miss ? 'miss' : ''}"><b>${SOLF[c.s]}</b><span>${c.avg == null ? 'not heard' : (c.avg > 0 ? '+' : c.avg < 0 ? '−' : '') + Math.abs(c.avg) + 'c'}</span></div>`).join('')}</div>
+      <div class="notegrid">${chips.map(c => `<div class="${c.miss ? 'miss' : ''}"><b>${solf(c.s, lesson.syl === 'flat' ? 'down' : 'up')}</b><span>${c.avg == null ? 'not heard' : (c.avg > 0 ? '+' : c.avg < 0 ? '−' : '') + Math.abs(c.avg) + 'c'}</span></div>`).join('')}</div>
     </div>
     <div class="coach"><div class="row" style="gap:10px;align-items:flex-start">${I.lungs}<div class="col" style="gap:3px"><b>${esc(dx.title)}</b><span class="small muted" style="line-height:1.45">${esc(dx.text)}</span></div></div></div>
     ${badgeStrip(badges)}
@@ -621,6 +637,66 @@ function badgeStrip(badges){
     ${badges.map(b => `<div class="item" style="background:var(--s2)"><span class="badge" style="background:rgba(255,209,102,.16);color:#ffd166">${I.badge}</span><span class="col"><b>${b.title}</b><span class="sub">${b.hint}</span></span></div>`).join('')}</div>`;
 }
 
+// ---------- harmony holds ----------
+screens.harmony = ({ lesson }) => ({ html: `<div class="screen">
+    <div class="row">
+      <button class="icon-btn" id="quit" aria-label="Quit drill">${I.x}</button>
+      <div class="col grow" style="gap:0"><b style="font-size:15px">${esc(lesson.title)}</b><span class="small muted">${esc(lesson.sub)}</span></div>
+      <span class="chip" id="count">1 of ${lesson.rounds.length}</span>
+    </div>
+    <div class="banner">${A.state.touchMode ? 'Touch mode: drag up and down to hold your line.' : 'Headphones help here. Without them the chord goes into the mic along with your voice.'}</div>
+    <div class="drill-stage" style="height:300px"><canvas id="cv"></canvas><span class="status" id="status">Listen</span></div>
+    <div class="grid3">
+      <div class="stat metric"><span class="small muted">Centre</span><b id="m_centre">–<small> c</small></b><em class="muted" id="t_centre">on the note</em></div>
+      <div class="stat metric"><span class="small muted">Steady</span><b id="m_sd">–<small> c</small></b><em class="muted" id="t_sd">under 20</em></div>
+      <div class="stat metric"><span class="small muted" id="l_third">${lesson.rounds.some(r => r[3]) ? 'Pulled' : 'Held'}</span><b id="m_third">–<small>${lesson.rounds.some(r => r[3]) ? ' c' : '%'}</small></b><em class="muted" id="t_third">${lesson.rounds.some(r => r[3]) ? 'under 30' : 'over 70'}</em></div>
+    </div>
+    <div class="note">${I.info}<div id="tip">Your note sits inside the chord. Keep it exactly where it was when the chord changes, and let the harmony move around you.</div></div>
+    <div class="grow"></div>
+    <button class="btn secondary" id="hear">${I.speaker} Hear the chord again</button>
+  </div>`, mount(root){
+    const $ = s => root.querySelector(s);
+    const startedAt = performance.now();
+    const changing = lesson.rounds.some(r => r[3]);
+    const d = new HarmonyDrill($('#cv'), {
+      base: S.base, tol: S.tol, rounds: lesson.rounds, secs: lesson.secs, statusEl: $('#status'),
+      onRound(r, i){
+        $('#count').textContent = `${Math.min(i + 2, lesson.rounds.length)} of ${lesson.rounds.length}`;
+        if (!r.heard) { $('#tip').textContent = 'Not enough of that hold was heard. Come in as soon as the chord starts and keep the sound going.'; ['centre','sd','third'].forEach(k => { $('#m_' + k).innerHTML = '–'; }); return; }
+        const set = (k, v, u, ok) => { $('#m_' + k).innerHTML = `${v}<small> ${u}</small>`; $('#t_' + k).className = ok ? 'ok' : 'no'; };
+        set('centre', (r.centre > 0 ? '+' : '') + r.centre, 'c', Math.abs(r.centre) <= S.tol);
+        set('sd', r.sd, 'c', r.sd <= 20);
+        if (changing) set('third', (r.pull > 0 ? '+' : '') + r.pull, 'c', r.pull <= 30);
+        else set('third', r.held, '%', r.held >= 70);
+        $('#tip').textContent = r.pass ? `Clean. You held the ${r.deg} without being dragged off it.`
+          : changing && r.pull > 30 ? `The chord pulled you ${r.pull} cents when it changed. Your note did not move, so do not let it.`
+          : r.sd > 20 ? 'The note wandered. Steady air, and stop listening to the chord for a second.'
+          : Math.abs(r.centre) > S.tol ? `You sat ${Math.abs(r.centre)} cents ${r.centre > 0 ? 'above' : 'below'} the ${r.deg}. Match the single note at the start before the chord comes in.`
+          : 'Close. Hold it a little longer inside the band next time.';
+      },
+      onEnd(results){ timeSpent(startedAt); markStage('control'); go('harmonyResults', { lesson, results }); },
+    });
+    window.__pp.drill = d;
+    $('#hear').onclick = () => d.replay();
+    $('#quit').onclick = () => { timeSpent(startedAt); go('studio'); };
+    return () => d.destroy();
+  }});
+
+screens.harmonyResults = ({ lesson, results }) => {
+  const passed = results.filter(r => r.pass).length, total = results.length;
+  const acc = recordHold(lesson.id, passed, total, passed * 30);
+  const badges = M.checkBadges({ passedAny: passed > 0 });
+  const changing = lesson.rounds.some(r => r[3]);
+  return { html: `<div class="screen">
+    <div class="col" style="align-items:center;gap:6px;text-align:center;margin-top:12px"><span class="eyebrow" style="color:${acc >= 60 ? 'var(--good)' : 'var(--warn)'}">${acc >= 60 ? 'Drill complete' : 'Keep practising'}</span><h1 style="font-size:30px">${esc(lesson.title)}</h1></div>
+    <div class="card col" style="align-items:center;gap:4px;padding:24px 0;border-radius:24px"><span class="big">${passed}<span style="font-size:36px;color:var(--muted)">/${total}</span></span><span class="muted">holds inside the chord · +${passed * 30} XP</span></div>
+    <div class="list">${results.map((r, i) => `<div class="item"><span class="badge ${r.pass ? 'done' : ''}">${r.pass ? I.check : i + 1}</span><span class="col grow"><b>${r.heard ? esc(r.deg + ' of ' + r.chord.toLowerCase()) : 'Round ' + (i + 1)}</b><span class="sub">${!r.heard ? 'Not heard' : `centre ${r.centre > 0 ? '+' : ''}${r.centre}c · steady ${r.sd}c · ${changing ? `pulled ${r.pull}c` : `held ${r.held}%`}`}</span></span></div>`).join('')}</div>
+    ${badgeStrip(badges)}
+    <div class="grow"></div>
+    <div class="col"><button class="btn primary" id="again">Try again</button><button class="btn ghost" data-go="studio">Done</button></div>
+  </div>`, mount(root){ root.querySelector('#again').onclick = () => startLesson(lesson); A.blip(acc >= 60 ? 'big' : 'ok'); } };
+};
+
 // ---------- drills ----------
 screens.drill = ({ lesson }) => {
   const vib = lesson.mode === 'vibrato';
@@ -668,7 +744,7 @@ screens.drillResults = ({ lesson, results }) => {
   return { html: `<div class="screen">
     <div class="col" style="align-items:center;gap:6px;text-align:center;margin-top:12px"><span class="eyebrow" style="color:${acc >= 60 ? 'var(--good)' : 'var(--warn)'}">${acc >= 60 ? 'Drill complete' : 'Keep practising'}</span><h1 style="font-size:30px">${esc(lesson.title)}</h1></div>
     <div class="card col" style="align-items:center;gap:4px;padding:24px 0;border-radius:24px"><span class="big">${passed}<span style="font-size:36px;color:var(--muted)">/${total}</span></span><span class="muted">holds passed · +${passed * 20} XP</span></div>
-    <div class="list">${results.map((r, i) => `<div class="item"><span class="badge ${r.pass ? 'done' : ''}">${r.pass ? I.check : i + 1}</span><span class="col"><b>${SOLF[lesson.notes[i]]}</b><span class="sub">${!r.heard ? 'Not heard' : lesson.mode === 'vibrato' ? `${r.rate} Hz · ±${r.width}c · centre ${r.centre > 0 ? '+' : ''}${r.centre}c` : `wobble ${r.wobble}c · drift ${r.drift > 0 ? '+' : ''}${r.drift}c · centre ${r.centre > 0 ? '+' : ''}${r.centre}c`}</span></span></div>`).join('')}</div>
+    <div class="list">${results.map((r, i) => `<div class="item"><span class="badge ${r.pass ? 'done' : ''}">${r.pass ? I.check : i + 1}</span><span class="col"><b>${solf(lesson.notes[i], 'up')}</b><span class="sub">${!r.heard ? 'Not heard' : lesson.mode === 'vibrato' ? `${r.rate} Hz · ±${r.width}c · centre ${r.centre > 0 ? '+' : ''}${r.centre}c` : `wobble ${r.wobble}c · drift ${r.drift > 0 ? '+' : ''}${r.drift}c · centre ${r.centre > 0 ? '+' : ''}${r.centre}c`}</span></span></div>`).join('')}</div>
     ${badgeStrip(badges)}
     <div class="grow"></div>
     <div class="col"><button class="btn primary" id="again">Try again</button><button class="btn ghost" data-go="studio">Done</button></div>
@@ -680,7 +756,7 @@ screens.progress = (p = {}) => {
   const all = p.all && S.pro;
   const st = stats(all ? null : 7);
   const semis = [0,2,4,5,7,9,11].concat([1,3,6,8,10].filter(s => S.notes[s]));
-  const rows = semis.filter(s => S.notes[s] && S.notes[s].tries).map(s => { const n = S.notes[s]; const a = Math.round(n.hits / n.tries * 100); return `<div class="hbar"><span>${SOLF[s]}</span><span class="track"><i style="width:${a}%;background:${a >= 80 ? 'var(--good)' : a >= 60 ? 'var(--warn)' : 'var(--bad)'}"></i></span><span>${a}%</span></div>`; }).join('');
+  const rows = semis.filter(s => S.notes[s] && S.notes[s].tries).map(s => { const n = S.notes[s]; const a = Math.round(n.hits / n.tries * 100); return `<div class="hbar"><span>${solf(s, [3,8,10].includes(s) ? 'down' : 'up')}</span><span class="track"><i style="width:${a}%;background:${a >= 80 ? 'var(--good)' : a >= 60 ? 'var(--warn)' : 'var(--bad)'}"></i></span><span>${a}%</span></div>`; }).join('');
   const tend = st.cents, pos = Math.max(4, Math.min(96, 50 + tend));
   return { html: `<div class="screen tabbed">
     <div class="row between"><h1>Progress</h1><button class="icon-btn" data-go="settings" aria-label="Settings">${I.gear}</button></div>
@@ -763,7 +839,7 @@ screens.paywall = () => ({ html: `<div class="screen" style="gap:14px">
   <div class="row" style="justify-content:flex-end"><button class="icon-btn" data-go="home" aria-label="Close">${I.x}</button></div>
   <div class="col" style="gap:10px"><span class="pro" style="align-self:flex-start;font-size:12px;padding:5px 10px">PRO</span><h1>From in tune to riffing clean</h1></div>
   <div class="col" style="gap:12px">
-    ${[['Riffs and runs.','Melisma drills that speed up as you get cleaner.'],['Vocal technique.','Vibrato and steady sustain, scored live.'],['Every unit.','Intervals, sharps and flats, short melodies.'],['Perfect mode.','The hole shrinks to ±15 cents.'],['Full history.','All-time accuracy and per-note coaching.']].map(([b, t]) => `<div class="check">${I.check}<div><b>${b}</b> <span class="muted">${t}</span></div></div>`).join('')}
+    ${[['Chord lab.','Arpeggios, chord tones, and holding a line while the harmony moves.'],['Riffs and runs.','Melisma drills that speed up as you get cleaner.'],['Minor and chromatic.','Me, Le and Te. Every one of the twelve notes.'],['Vocal technique.','Vibrato and steady sustain, scored live.'],['Perfect mode.','The hole shrinks to ±15 cents, with full history.']].map(([b, t]) => `<div class="check">${I.check}<div><b>${b}</b> <span class="muted">${t}</span></div></div>`).join('')}
   </div>
   <div class="grow"></div>
   <div class="col" style="gap:10px" id="plans">

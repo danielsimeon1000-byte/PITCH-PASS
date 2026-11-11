@@ -26,6 +26,20 @@ fills around the ball) to open the wall. Miss and the wall stops dead at the bal
 you get one more go against a countdown; miss again and it drops away. Hits are graded
 Perfect, Great or Good by how many cents off you were, with combo multipliers.
 
+## Chromatic solfege and minor
+Syllables are directional, the way singers use them: a raised note climbing to the
+next one is Di, the same pitch falling back is Ra. Minor keys are taught do-based, so
+the flat third is Me, the flat sixth Le and the flat seventh Te. Unit 5 covers natural,
+harmonic and melodic minor plus the major-against-minor third, which is the first
+interval worth being able to hear.
+
+## Chord lab
+Arpeggios for triads, sevenths, diminished and augmented. Find the tone plays a chord
+and asks for one note of it: the wall stays solid wood so the hole cannot be used as an
+answer key. Then the hold drills put a quiet chord underneath while you sustain one of
+its notes, and Through the changes moves the chord under a common tone and measures how
+far your ear gets dragged.
+
 ## Progression
 XP and ranks, a daily goal ring, streaks with banked rest days, thirteen badges, a
 share card drawn from the game art, and challenge links that seed a friend the exact

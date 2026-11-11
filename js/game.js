@@ -2,7 +2,7 @@
 // You must HOLD the note in tune (the ring around the ball fills) to open the wall.
 // Miss on a single note and the wall stops at the ball: hold the note to get a second chance.
 import * as A from './audio.js';
-import { SOLF, SCALE } from './content.js';
+import { SOLF, SCALE, solf } from './content.js';
 
 const TONE_LEN = 1.1, TRAVEL = 3.6, LEAD = 0.75, LOCK = 0.25, GATE_WAIT = 4.2;
 const GRADES = {
@@ -57,28 +57,40 @@ export class Game {
   spawn(){
     const p = this.queue.shift(); if (!p) return null;
     const base = this.o.base;
-    if (p.kind === 'single') {
+    const lab = i => (p.labels && p.labels[i]) || solf(p.notes[i], this.o.syl === 'flat' ? 'down' : 'up');
+    // one wall, blocked on a miss: a plain note, or one note picked out of a chord
+    if (p.kind === 'single' || p.kind === 'chordtone') {
       const speed = (this.W + 50 - this.bx) / TRAVEL;
-      this.phrase = { kind: 'single', speed, ww: Math.min(78, this.W * 0.2), need: LOCK, walls: [this.wall(base + p.notes[0], p.notes[0], this.W + 50)] };
-      A.playPhrase([base + p.notes[0]], TONE_LEN);
+      this.phrase = { kind: 'single', speed, ww: Math.min(78, this.W * 0.2), need: LOCK,
+        chord: p.chord ? p.chord.map(n => base + n) : null, chordName: p.chordName, ask: p.ask, hideHole: p.hideHole,
+        walls: [this.wall(base + p.notes[0], p.notes[0], this.W + 50, lab(0))] };
+      if (p.chord) A.playChord(this.phrase.chord, 1.6);
+      else A.playPhrase([base + p.notes[0]], TONE_LEN);
     } else {
       const g = p.gap, speed = p.kind === 'run' ? Math.max(150, 64 / g) : 120;
       const ww = p.kind === 'run' ? Math.min(30, speed * g - 16) : Math.min(46, speed * g - 20);
-      const ref = A.playPhrase(p.notes.map(n => base + n), g);
+      const chord = p.chord ? p.chord.map(n => base + n) : null;
+      const ref = chord ? A.playChord(chord, 1.5) : A.playPhrase(p.notes.map(n => base + n), g);
       const x0 = this.bx + speed * (ref + 1.3);
-      this.phrase = { kind: p.kind, speed, ww, gap: g, need: Math.min(0.15, g * 0.4), walls: p.notes.map((n, i) => this.wall(base + n, n, x0 + i * speed * g)) };
+      this.phrase = { kind: p.kind, speed, ww, gap: g, need: Math.min(0.15, g * 0.4), chord, chordName: p.chordName,
+        walls: p.notes.map((n, i) => this.wall(base + n, n, x0 + i * speed * g, lab(i))) };
     }
+    if (this.o.onPhrase) this.o.onPhrase(this.phrase);
     return this.phrase;
   }
-  wall(midi, semi, x){ return { midi, semi, label: SOLF[semi] || '', x, done: false, hit: false, firstTry: true, lock: 0, samples: [], best: null, heard: false, state: 'approach', gateT: 0, fade: 0 }; }
+  wall(midi, semi, x, label){ return { midi, semi, label: label || SOLF[semi] || '', x, done: false, hit: false, firstTry: true, lock: 0, samples: [], best: null, heard: false, state: 'approach', gateT: 0, fade: 0 }; }
   active(){ return this.phrase && this.phrase.walls.find(w => !w.done); }
 
   hearAgain(){
     if (!this.phrase) return;
     const left = this.phrase.walls.filter(w => !w.done);
     if (!left.length) return;
-    if (this.phrase.kind === 'single') { A.playPhrase([left[0].midi], TONE_LEN); if (left[0].state === 'gate') left[0].gateT = Math.max(0, left[0].gateT - TONE_LEN); return; }
-    const ref = A.playPhrase(this.phrase.walls.map(w => w.midi), this.phrase.gap);
+    if (this.phrase.kind === 'single') {
+      if (this.phrase.chord) A.playChord(this.phrase.chord, 1.6); else A.playPhrase([left[0].midi], TONE_LEN);
+      if (left[0].state === 'gate') left[0].gateT = Math.max(0, left[0].gateT - TONE_LEN);
+      return;
+    }
+    const ref = this.phrase.chord ? A.playChord(this.phrase.chord, 1.5) : A.playPhrase(this.phrase.walls.map(w => w.midi), this.phrase.gap);
     const first = left[0], want = this.bx + this.phrase.speed * (ref + 1.0);
     if (first.x < want) { const push = want - first.x; left.forEach(w => { w.x += push; }); }
   }
@@ -119,7 +131,10 @@ export class Game {
     this.kick = 1; A.thud(); A.haptic('miss');
     this.flash = 0.7; this.flashColor = '255,107,120';
     const c = w.best;
-    this.toast(!w.heard ? `Blocked<small>sing ${this.o.blind ? 'the note' : w.label} and hold it to open the wall</small>` : `Blocked<small>${Math.abs(c)} cents ${c > 0 ? 'sharp' : 'flat'}. Hold ${this.o.blind ? 'it' : w.label} to open the wall</small>`, 'var(--bad)');
+    const what = this.phrase.ask ? 'the ' + this.phrase.ask : this.o.blind ? 'the note' : w.label;
+    this.toast(!w.heard ? `Blocked<small>sing ${what} and hold it to open the wall</small>`
+      : this.phrase.hideHole ? `Blocked<small>that was not ${what}. Listen again and try the chord in your head first</small>`
+      : `Blocked<small>${Math.abs(c)} cents ${c > 0 ? 'sharp' : 'flat'}. Hold ${this.o.blind ? 'it' : w.label} to open the wall</small>`, 'var(--bad)');
     A.playPhrase([w.midi], TONE_LEN);
     w.lock = 0; w.samples = [];
     this.o.onScore && this.o.onScore(this.score, this.combo);
@@ -129,7 +144,8 @@ export class Game {
     w.cents = w.best;
     A.thud(); A.haptic('miss'); this.shake = 1;
     this.flash = 0.8; this.flashColor = '255,107,120';
-    if (this.phrase.kind === 'single') this.toast(!w.heard ? `Missed<small>didn't hear you this time</small>` : `Missed<small>you sang ${A.noteName(w.midi + (w.best || 0) / 100)}, target ${A.noteName(w.midi)}</small>`, 'var(--bad)');
+    if (this.phrase.kind === 'single') this.toast(!w.heard ? `Missed<small>didn't hear you this time</small>`
+      : `Missed<small>${this.phrase.ask ? `the ${this.phrase.ask} was ${w.label === this.phrase.ask ? A.noteName(w.midi) : w.label}` : `you sang ${A.noteName(w.midi + (w.best || 0) / 100)}, target ${A.noteName(w.midi)}`}</small>`, 'var(--bad)');
     else this.kick = 0.6;
     this.record(w);
     this.phraseCheck();
@@ -145,7 +161,7 @@ export class Game {
     if (p.kind !== 'single' && p.walls.every(x => x.done)) {
       const n = p.walls.length, k = p.walls.filter(x => x.hit).length;
       if (k === n) {
-        const bonus = 150 * n; this.score += bonus; A.blip('big'); A.haptic('perfect');
+        const bonus = Math.min(600, 120 * n); this.score += bonus; A.blip('big'); A.haptic('perfect');
         this.toast(`CLEAN RUN<small>${n} of ${n} notes · +${bonus} bonus</small>`, '#ffd166');
       } else this.toast(`${k} of ${n}<small>${k >= n - 1 ? 'so close' : 'tap Hear again before the next one'}</small>`, 'var(--warn)');
       this.o.onScore && this.o.onScore(this.score, this.combo);
@@ -175,9 +191,10 @@ export class Game {
         const t = this.active();
         if (v != null) {
           const r = Math.round(v), c = Math.round((v - r) * 100);
-          const off = t ? Math.round((v - t.midi) * 100) : null;
+          const hide = this.phrase && this.phrase.hideHole && t && !t.done;
+          const off = t && !hide ? Math.round((v - t.midi) * 100) : null;
           const col = off == null ? 'var(--ink)' : Math.abs(off) <= this.o.tol ? 'var(--good)' : Math.abs(off) <= this.o.tol * 2 ? 'var(--warn)' : 'var(--bad)';
-          this.o.tunerEl.innerHTML = `You: <b>${A.noteName(v)}</b> ${c >= 0 ? '+' : ''}${c}c` + (t ? ` · <b style="color:${col}">${off > 0 ? '+' : ''}${off}c</b> from ${this.o.blind ? '?' : `<b>${t.label}</b>`}` : '');
+          this.o.tunerEl.innerHTML = `You: <b>${A.noteName(v)}</b> ${c >= 0 ? '+' : ''}${c}c` + (off != null ? ` · <b style="color:${col}">${off > 0 ? '+' : ''}${off}c</b> from ${this.o.blind ? '?' : `<b>${t.label}</b>`}` : '');
         } else this.o.tunerEl.innerHTML = A.state.touchMode ? 'Touch mode: drag up and down' : 'Waiting for your voice';
       }
       this.shake = Math.max(0, this.shake - dt * 2.5);
@@ -248,11 +265,12 @@ export class Game {
     const lanes = this.chromatic ? [0,1,2,3,4,5,6,7,8,9,10,11,12] : SCALE;
     const tgt = this.active();
     lanes.forEach(s => {
-      const y = this.y(this.o.base + s), main = SCALE.includes(s), isT = tgt && tgt.semi === s && !blind;
+      const hidden = this.phrase && this.phrase.hideHole && tgt && !tgt.done;
+      const y = this.y(this.o.base + s), main = SCALE.includes(s), isT = tgt && tgt.semi === s && !blind && !hidden;
       c.strokeStyle = isT ? 'rgba(255,138,42,.35)' : main ? 'rgba(255,255,255,.07)' : 'rgba(255,255,255,.035)'; c.lineWidth = 1;
       c.setLineDash([4, 6]); c.beginPath(); c.moveTo(38, y); c.lineTo(W, y); c.stroke(); c.setLineDash([]);
       if (main || !blind) {
-        const t = blind ? '•' : SOLF[s];
+        const t = blind ? '•' : solf(s, this.o.syl === 'flat' ? 'down' : 'up');
         c.fillStyle = isT ? '#ffb070' : blind ? 'rgba(255,255,255,.2)' : main ? 'rgba(255,255,255,.45)' : 'rgba(255,255,255,.25)';
         c.font = main ? `${isT ? 800 : 600} 12px "Bricolage Grotesque", sans-serif` : '500 10px "Bricolage Grotesque", sans-serif';
         c.fillText(t, 34 - c.measureText(t).width, y);
@@ -312,6 +330,13 @@ export class Game {
     ph.walls.forEach((w, i) => {
       if (w.x < -80 || w.x > W + 100) return;
       const x = w.x - ww / 2, cy = this.y(w.midi), half = this.holeHalf();
+      if (ph.hideHole && !w.done) {
+        this.wood(x, -10, ww, H + 20, i + 1, null);
+        c.fillStyle = '#fff'; c.textAlign = 'center'; c.font = '800 20px "Bricolage Grotesque", sans-serif';
+        c.shadowColor = 'rgba(0,0,0,.35)'; c.shadowBlur = 6;
+        c.fillText(w.label, w.x, H * 0.42); c.shadowBlur = 0; c.textAlign = 'left';
+        return;
+      }
       // a failed wall lifts away; a passed wall dims as it moves on
       const lift = w.state === 'fail' ? w.fade * 60 : 0;
       c.globalAlpha = w.state === 'fail' ? 1 - w.fade : w.done ? 0.6 : 1;

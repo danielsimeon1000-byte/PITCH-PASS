@@ -42,6 +42,49 @@ export function playPhrase(notes, each, vol = 0.35){
 }
 export const isPlaying = () => performance.now() < toneUntil;
 
+// A chord sounded as a block, for arpeggio and chord-tone work.
+export function playChord(midis, len = 1.5, vol = 0.22){
+  const a = ctx(), t = a.currentTime + 0.03;
+  midis.forEach((m, i) => voice(m, t + i * 0.012, len, vol));
+  toneUntil = performance.now() + len * 1000 + 160;
+  return len;
+}
+
+// A quiet sustained pad to sing against. It deliberately does NOT block the mic,
+// because the point is to hear your voice over it, so it is kept low and dull:
+// a lowpass takes the harmonics off, and the chord is voiced below the target note
+// so the detector locks to your voice rather than the pad.
+export function startPad(midis, vol = 0.085){
+  const a = ctx();
+  const master = a.createGain(); master.gain.value = 0;
+  const lp = a.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 620; lp.Q.value = 0.4;
+  master.connect(lp); lp.connect(a.destination);
+  let live = [];
+  function setNotes(ms){
+    const old = live;
+    old.forEach(n => n.g.gain.setTargetAtTime(0, a.currentTime, 0.08));
+    setTimeout(() => old.forEach(n => { try { n.o1.stop(); n.o2.stop(); } catch (e) {} }), 600);
+    live = ms.map(m => {
+      const o1 = a.createOscillator(), o2 = a.createOscillator(), g = a.createGain(), g2 = a.createGain();
+      o1.type = 'sine'; o2.type = 'triangle';
+      o1.frequency.value = midiToHz(m); o2.frequency.value = midiToHz(m);
+      g2.gain.value = 0.22; o2.connect(g2); g2.connect(g); o1.connect(g); g.connect(master);
+      g.gain.value = 0; g.gain.setTargetAtTime(1 / Math.max(2, ms.length), a.currentTime, 0.09);
+      o1.start(); o2.start();
+      return { o1, o2, g };
+    });
+  }
+  setNotes(midis);
+  master.gain.setTargetAtTime(vol, a.currentTime, 0.12);
+  return {
+    setNotes,
+    stop(){
+      master.gain.setTargetAtTime(0, a.currentTime, 0.1);
+      setTimeout(() => { live.forEach(n => { try { n.o1.stop(); n.o2.stop(); } catch (e) {} }); try { master.disconnect(); lp.disconnect(); } catch (e) {} }, 600);
+    },
+  };
+}
+
 export function blip(kind){
   const a = ctx(); const t = a.currentTime;
   const seq = kind === 'ok' ? [[84,0],[91,0.08]] : kind === 'big' ? [[79,0],[84,0.08],[91,0.16]] : [[40,0]];
