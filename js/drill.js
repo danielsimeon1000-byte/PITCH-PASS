@@ -238,8 +238,15 @@ export class HarmonyDrill {
   get degName(){ return CHORDS[this.chordId].deg[this.deg]; }
   get secs(){ return this.o.secs || 5; }
   // voice the chord below the singer so the detector locks to the voice, not the pad
-  voicing(id, root){ const t = this.target; return chordNotes(id, root).map(n => { let m = this.o.base + n;
-    while (m > t - 3) m -= 12; while (m < t - 22) m += 12; return m; }); }
+  // The pad completes the chord rather than doubling it: the note you are holding is
+  // left out, so nothing in the accompaniment shares your fundamental. Everything
+  // else is pushed at least an octave below you, clear of the detector's window.
+  voicing(id, root){
+    const t = this.target, mine = ((t % 12) + 12) % 12;
+    return chordNotes(id, root)
+      .filter(n => ((this.o.base + n) % 12 + 12) % 12 !== mine)
+      .map(n => { let m = this.o.base + n; while (m > t - 12) m -= 12; while (m < t - 26) m += 12; return m; });
+  }
   chordAt(p){ if (!this.changes) return [this.chordId, this.root];
     return this.changes[Math.min(this.changes.length - 1, Math.floor(p * this.changes.length))]; }
   nameAt(p){ const [id, r] = this.chordAt(p); return chordName(id, r); }
@@ -251,6 +258,7 @@ export class HarmonyDrill {
   begin(){
     this.samples = []; this.seg = 0; this.phase = 'listen'; this.tracker.reset();
     if (this.pad) { this.pad.stop(); this.pad = null; }
+    this.tracker.expect(this.target);
     const chordLen = A.playChord(this.voicing(this.chordId, this.root).concat([this.target]), 1.4, 0.2);
     this.phaseEnd = performance.now() + chordLen * 1000 + 220;
     this.status(`Listen \u00b7 your note is the ${this.degName}`);
@@ -262,6 +270,7 @@ export class HarmonyDrill {
     if (this.ended) return;
     const dt = Math.min(0.05, (now - this.last) / 1000); this.last = now;
     const v = this.tracker.update(now, dt, this.target, false);
+    if (this.pad) this.pad.duck(v != null);
     if (this.phase === 'listen' && now > this.phaseEnd) {
       this.phase = 'wait';
       this.pad = A.startPad(this.voicing(this.chordId, this.root));

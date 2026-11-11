@@ -8,6 +8,7 @@ const fresh = () => ({
   tol: 50,                // hole size in cents
   pro: false,
   inputMode: 'mic',
+  instrument: 'voice',   // what the reference tones and the accompaniment sound like
   streak: { count: 0, last: null, rest: 0 },
   goalMin: 10,            // daily practice goal in minutes
   mins: {},               // day -> minutes sung

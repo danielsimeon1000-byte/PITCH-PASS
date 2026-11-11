@@ -6,9 +6,14 @@ export const midiToHz = m => 440 * Math.pow(2, (m - 69) / 12);
 export const hzToMidi = f => 69 + 12 * Math.log2(f / 440);
 export const noteName = m => { const r = Math.round(m); return NAMES[((r % 12) + 12) % 12] + (Math.floor(r / 12) - 1); };
 
-let ac = null, analyser = null, buf = null, stream = null;
+let ac = null, analyser = null, buf = null, stream = null, micTrack = null;
 let toneUntil = 0;
-export const state = { micOn: false, touchMode: false };
+export const state = { micOn: false, touchMode: false, echo: false, instrument: 'voice' };
+
+// Frequencies the app is deliberately sounding right now. The detector refuses to
+// report these, so a sustained chord cannot be mistaken for the singer.
+let sounding = [];
+export const soundingHz = () => sounding;
 
 export function ctx(){
   if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
@@ -16,19 +21,43 @@ export function ctx(){
   return ac;
 }
 
-function voice(midi, start, len, vol){
-  const a = ctx();
-  const o1 = a.createOscillator(), o2 = a.createOscillator(), g = a.createGain(), g2 = a.createGain();
-  o1.type = 'triangle'; o2.type = 'sine';
-  o1.frequency.value = midiToHz(midi); o2.frequency.value = midiToHz(midi) * 2;
-  g2.gain.value = 0.18;
-  o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(a.destination);
-  const rel = Math.min(0.25, len * 0.4);
-  g.gain.setValueAtTime(0, start);
-  g.gain.linearRampToValueAtTime(vol, start + 0.02);
-  g.gain.setValueAtTime(vol, start + Math.max(0.03, len - rel));
-  g.gain.exponentialRampToValueAtTime(0.0001, start + len);
-  o1.start(start); o2.start(start); o1.stop(start + len + 0.05); o2.stop(start + len + 0.05);
+// Rehearsal instruments. partials are [harmonic, gain, wave]; sustain below 0.5 means
+// the note dies away, which is what makes the pad comp a chord instead of holding it.
+export const INSTRUMENTS = {
+  voice:   { name:'Voice',     sub:'Warm and plain',        partials:[[1,1,'triangle'],[2,0.18,'sine']],                       a:0.02,  d:0.10, s:0.85, r:0.25, lp:0,    pro:false },
+  piano:   { name:'Piano',     sub:'Rehearsal room upright', partials:[[1,1,'triangle'],[2,0.38,'sine'],[3,0.14,'sine'],[5,0.05,'sine']], a:0.004, d:1.10, s:0.06, r:0.35, lp:4200, pro:true },
+  guitar:  { name:'Guitar',    sub:'Plucked nylon',          partials:[[1,1,'sawtooth'],[2,0.22,'sine'],[3,0.09,'triangle']],   a:0.006, d:0.75, s:0.10, r:0.35, lp:2600, pro:true },
+  strings: { name:'Strings',   sub:'Slow bow, sits under you', partials:[[1,1,'sawtooth'],[2,0.30,'sawtooth']],                 a:0.20,  d:0.20, s:0.90, r:0.45, lp:2100, pro:true, detune:7 },
+  organ:   { name:'Organ',     sub:'Drawbars, dead steady',  partials:[[1,1,'sine'],[2,0.5,'sine'],[3,0.28,'sine'],[4,0.18,'sine']], a:0.02, d:0.05, s:1, r:0.12, lp:0, pro:true },
+  tuner:   { name:'Pure tone', sub:'Nothing to hide behind', partials:[[1,1,'sine']],                                           a:0.01,  d:0.05, s:1,    r:0.15, lp:0,    pro:true },
+};
+export const inst = () => INSTRUMENTS[state.instrument] || INSTRUMENTS.voice;
+export const sustains = () => inst().s >= 0.5;
+
+function voice(midi, start, len, vol, ins){
+  const a = ctx(), I = ins || inst();
+  const out = a.createGain(); out.gain.value = 1;
+  let tail = out;
+  if (I.lp) { const lp = a.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = I.lp; lp.Q.value = 0.5; out.connect(lp); tail = lp; }
+  tail.connect(a.destination);
+  const g = a.createGain(); g.connect(out);
+  const f0 = midiToHz(midi);
+  const oscs = [];
+  I.partials.forEach(([h, amp, wave]) => {
+    const o = a.createOscillator(); o.type = wave; o.frequency.value = f0 * h;
+    const pg = a.createGain(); pg.gain.value = amp; o.connect(pg); pg.connect(g); o.start(start); oscs.push(o);
+    if (I.detune) { const o2 = a.createOscillator(); o2.type = wave; o2.frequency.value = f0 * h; o2.detune.value = I.detune;
+      const pg2 = a.createGain(); pg2.gain.value = amp * 0.6; o2.connect(pg2); pg2.connect(g); o2.start(start); oscs.push(o2); }
+  });
+  const peak = vol, sus = vol * I.s;
+  const rel = Math.min(I.r, Math.max(0.06, len * 0.4));
+  g.gain.setValueAtTime(0.0001, start);
+  g.gain.linearRampToValueAtTime(peak, start + I.a);
+  g.gain.setTargetAtTime(Math.max(0.0002, sus), start + I.a, Math.max(0.03, I.d));
+  g.gain.setTargetAtTime(0.0001, start + Math.max(I.a + 0.05, len - rel), rel / 3);
+  const stop = start + len + rel + 0.1;
+  oscs.forEach(o => o.stop(stop));
+  setTimeout(() => { try { out.disconnect(); if (tail !== out) tail.disconnect(); } catch (e) {} }, (stop - a.currentTime + 0.3) * 1000);
 }
 
 // Play notes back to back. Returns duration in seconds. The mic is ignored while it plays.
@@ -50,39 +79,72 @@ export function playChord(midis, len = 1.5, vol = 0.22){
   return len;
 }
 
-// A quiet sustained pad to sing against. It deliberately does NOT block the mic,
-// because the point is to hear your voice over it, so it is kept low and dull:
-// a lowpass takes the harmonics off, and the chord is voiced below the target note
-// so the detector locks to your voice rather than the pad.
+// A chord to sing against. Three things stop it being heard as the singer:
+//   1. the browser's echo canceller is switched on for as long as it plays, which
+//      removes most of what the speaker puts back into the mic
+//   2. every frequency it sounds is registered, and the detector refuses to report
+//      a pitch sitting on one of them
+//   3. it ducks whenever a voice is detected, and it is voiced below the target
+// Headphones are still better, but they are no longer required.
 export function startPad(midis, vol = 0.085){
   const a = ctx();
   const master = a.createGain(); master.gain.value = 0;
-  const lp = a.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 620; lp.Q.value = 0.4;
+  const lp = a.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = inst().lp || 900; lp.Q.value = 0.4;
   master.connect(lp); lp.connect(a.destination);
-  let live = [];
-  function setNotes(ms){
+  const I = inst();
+  let notes = midis.slice(), live = [], comp = null, duck = 1, base = vol, stopped = false;
+
+  const register = () => { sounding = notes.map(midiToHz); };
+  const held = () => {
+    live.forEach(n => { n.g.gain.setTargetAtTime(0, a.currentTime, 0.08); });
     const old = live;
-    old.forEach(n => n.g.gain.setTargetAtTime(0, a.currentTime, 0.08));
-    setTimeout(() => old.forEach(n => { try { n.o1.stop(); n.o2.stop(); } catch (e) {} }), 600);
-    live = ms.map(m => {
-      const o1 = a.createOscillator(), o2 = a.createOscillator(), g = a.createGain(), g2 = a.createGain();
-      o1.type = 'sine'; o2.type = 'triangle';
-      o1.frequency.value = midiToHz(m); o2.frequency.value = midiToHz(m);
-      g2.gain.value = 0.22; o2.connect(g2); g2.connect(g); o1.connect(g); g.connect(master);
-      g.gain.value = 0; g.gain.setTargetAtTime(1 / Math.max(2, ms.length), a.currentTime, 0.09);
-      o1.start(); o2.start();
-      return { o1, o2, g };
+    setTimeout(() => old.forEach(n => { try { n.o.forEach(o => o.stop()); } catch (e) {} }), 700);
+    live = notes.map(m => {
+      const g = a.createGain(); g.connect(master);
+      const f0 = midiToHz(m), o = [];
+      I.partials.forEach(([h, amp, wave]) => { const osc = a.createOscillator(); osc.type = wave; osc.frequency.value = f0 * h;
+        const pg = a.createGain(); pg.gain.value = amp; osc.connect(pg); pg.connect(g); osc.start(); o.push(osc); });
+      g.gain.value = 0; g.gain.setTargetAtTime(1 / Math.max(2, notes.length), a.currentTime, 0.09);
+      return { g, o };
     });
-  }
-  setNotes(midis);
-  master.gain.setTargetAtTime(vol, a.currentTime, 0.12);
+  };
+  // a piano or a guitar cannot hold a chord, so it comps it, the way a rehearsal
+  // pianist actually plays underneath a singer
+  const strike = () => {
+    if (stopped) return;
+    const t = a.currentTime + 0.02;
+    notes.forEach((m, i) => voice(m, t + i * 0.018, 1.5, (vol * 2.4) / Math.max(2, notes.length), I));
+  };
+  const startComp = () => { strike(); comp = setInterval(strike, 1400); };
+
+  register();
+  if (sustains()) { held(); master.gain.setTargetAtTime(vol, a.currentTime, 0.12); }
+  else { master.gain.value = 0; startComp(); }
+  setEcho(true);
+
   return {
-    setNotes,
+    setNotes(ms){ notes = ms.slice(); register(); if (sustains()) held(); else strike(); },
+    // drop under the singer the moment a voice is heard
+    duck(on){ const want = on ? 0.45 : 1; if (want === duck) return; duck = want;
+      if (sustains()) master.gain.setTargetAtTime(base * duck, a.currentTime, 0.12); },
     stop(){
+      stopped = true; sounding = [];
+      if (comp) clearInterval(comp);
       master.gain.setTargetAtTime(0, a.currentTime, 0.1);
-      setTimeout(() => { live.forEach(n => { try { n.o1.stop(); n.o2.stop(); } catch (e) {} }); try { master.disconnect(); lp.disconnect(); } catch (e) {} }, 600);
+      setTimeout(() => { live.forEach(n => { try { n.o.forEach(o => o.stop()); } catch (e) {} });
+        try { master.disconnect(); lp.disconnect(); } catch (e) {} }, 700);
+      setEcho(false);
     },
   };
+}
+
+// Echo cancellation is off for ordinary lessons because it colours the voice, and
+// nothing is playing while you sing anyway. It goes on only while a pad is running.
+export async function setEcho(on){
+  state.echo = on;
+  if (!micTrack) return false;
+  try { await micTrack.applyConstraints({ echoCancellation: on, noiseSuppression: false, autoGainControl: false }); return true; }
+  catch (e) { return false; }
 }
 
 export function blip(kind){
@@ -134,6 +196,7 @@ export async function startMic(){
   try {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('no-api');
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    micTrack = stream.getAudioTracks()[0] || null;
     const a = ctx();
     const src = a.createMediaStreamSource(stream);
     analyser = a.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0;
@@ -158,12 +221,15 @@ export function frame(){
 
 // Drop-in tracker used by the game and the drills.
 export class PitchTracker {
-  constructor(){ this.v = new VoiceTracker(); }
+  constructor(){ this.v = new VoiceTracker(); this.range = null; }
+  // Tell the detector roughly where the note should be. Used by the hold drills,
+  // where a chord is sounding and an unconstrained search would find its root.
+  expect(midi, semis = 7){ this.range = midi == null ? null : { lo: midiToHz(midi - semis), hi: midiToHz(midi + semis) }; }
   update(now, dt, fold, fast = false){
     if (!state.micOn) { return this.v.live(now) ? this.v.smooth : null; }
     const f = frame();
     if (!f) { this.v.silentFor += dt; return this.v.live(now) ? this.v.smooth : null; }
-    return this.v.push(f, sampleRate(), now, dt, fold, fast);
+    return this.v.push(f, sampleRate(), now, dt, fold, fast, sounding, this.range);
   }
   setTouch(m, now){ this.v.setManual(m, now); }
   live(now){ return this.v.live(now); }

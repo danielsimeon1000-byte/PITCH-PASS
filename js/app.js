@@ -637,6 +637,30 @@ function badgeStrip(badges){
     ${badges.map(b => `<div class="item" style="background:var(--s2)"><span class="badge" style="background:rgba(255,209,102,.16);color:#ffd166">${I.badge}</span><span class="col"><b>${b.title}</b><span class="sub">${b.hint}</span></span></div>`).join('')}</div>`;
 }
 
+// ---------- rehearsal instrument ----------
+function instrumentSheet(after){
+  const rows = Object.entries(A.INSTRUMENTS).map(([k, v]) => {
+    const locked = v.pro && !S.pro;
+    return `<button class="plan ${S.instrument === k ? 'on' : ''}" data-ins="${k}" ${locked ? 'data-locked="1"' : ''}>
+      <span class="radio"></span>
+      <span class="col grow" style="gap:2px"><b>${v.name}</b><span class="small muted">${v.sub}</span></span>
+      ${locked ? '<span class="pro">PRO</span>' : ''}</button>`;
+  }).join('');
+  sheet(`<h1 style="font-size:22px">Rehearsal instrument</h1>
+    <p class="small muted" style="margin:-6px 0 0">What plays the reference notes and the chords underneath you. Piano and guitar comp the chord instead of holding it.</p>
+    <div class="col" style="gap:8px">${rows}</div>
+    <button class="btn ghost" id="close">Close</button>`, (bg, close) => {
+    bg.querySelector('#close').onclick = close;
+    bg.querySelectorAll('[data-ins]').forEach(b => b.onclick = () => {
+      if (b.dataset.locked) { close(); return go('paywall'); }
+      S.instrument = b.dataset.ins; A.state.instrument = b.dataset.ins; save();
+      A.ctx(); A.playPhrase([S.base, S.base + 4, S.base + 7], 0.26);
+      bg.querySelectorAll('[data-ins]').forEach(x => x.classList.toggle('on', x === b));
+      if (after) setTimeout(() => { close(); after(); }, 420);
+    });
+  });
+}
+
 // ---------- harmony holds ----------
 screens.harmony = ({ lesson }) => ({ html: `<div class="screen">
     <div class="row">
@@ -644,7 +668,10 @@ screens.harmony = ({ lesson }) => ({ html: `<div class="screen">
       <div class="col grow" style="gap:0"><b style="font-size:15px">${esc(lesson.title)}</b><span class="small muted">${esc(lesson.sub)}</span></div>
       <span class="chip" id="count">1 of ${lesson.rounds.length}</span>
     </div>
-    <div class="banner">${A.state.touchMode ? 'Touch mode: drag up and down to hold your line.' : 'Headphones help here. Without them the chord goes into the mic along with your voice.'}</div>
+    <div class="row" style="gap:8px">
+      <button class="chip" id="ins" style="gap:8px"><span class="muted small">Chord</span><b>${A.INSTRUMENTS[A.state.instrument].name}</b></button>
+      ${A.state.touchMode ? '<span class="small muted">Touch mode: drag to hold your line.</span>' : '<span class="small muted">Speakers are fine. The chord is filtered out of what you sing.</span>'}
+    </div>
     <div class="drill-stage" style="height:300px"><canvas id="cv"></canvas><span class="status" id="status">Listen</span></div>
     <div class="grid3">
       <div class="stat metric"><span class="small muted">Centre</span><b id="m_centre">–<small> c</small></b><em class="muted" id="t_centre">on the note</em></div>
@@ -677,6 +704,7 @@ screens.harmony = ({ lesson }) => ({ html: `<div class="screen">
       onEnd(results){ timeSpent(startedAt); markStage('control'); go('harmonyResults', { lesson, results }); },
     });
     window.__pp.drill = d;
+    $('#ins').onclick = () => instrumentSheet(() => go('harmony', { lesson }));
     $('#hear').onclick = () => d.replay();
     $('#quit').onclick = () => { timeSpent(startedAt); go('studio'); };
     return () => d.destroy();
@@ -809,6 +837,9 @@ screens.settings = () => ({ html: `<div class="screen">
   <div class="col"><span class="eyebrow">Daily goal</span>
     <div class="seg" id="goal">${[5, 10, 20].map(v => `<button data-v="${v}" class="${S.goalMin === v ? 'on' : ''}">${v} min<small>${v === 5 ? 'busy day' : v === 10 ? 'steady' : 'serious'}</small></button>`).join('')}</div>
   </div>
+  <div class="col"><span class="eyebrow">Rehearsal instrument</span>
+    <div class="card row between"><div class="col" style="gap:2px"><b>${A.INSTRUMENTS[A.state.instrument].name}</b><span class="small muted">${A.INSTRUMENTS[A.state.instrument].sub}</span></div><button class="chip" id="ins">Change</button></div>
+  </div>
   <div class="col"><span class="eyebrow">Practice reminder</span>
     <div class="card row between"><div class="col" style="gap:2px"><b>${S.reminder ? 'Every day at ' + S.reminder : 'Off'}</b><span class="small muted">${S.reminder ? 'A nudge on the days you forget' : 'Pick a time you are usually free'}</span></div><button class="chip" id="rem">${S.reminder ? 'Change' : 'Set'}</button></div>
   </div>
@@ -823,6 +854,7 @@ screens.settings = () => ({ html: `<div class="screen">
   root.querySelectorAll('#tol button').forEach(b => b.onclick = () => { const v = +b.dataset.v; if (v === 15 && !S.pro) return go('paywall'); S.tol = v; save(); go('settings'); });
   root.querySelectorAll('#input button').forEach(b => b.onclick = async () => { S.inputMode = b.dataset.v; save(); if (b.dataset.v === 'touch') { A.state.touchMode = true; } else { A.ctx(); const ok = await A.startMic(); A.state.touchMode = !ok; } go('settings'); });
   root.querySelectorAll('#goal button').forEach(b => b.onclick = () => { S.goalMin = +b.dataset.v; save(); go('settings'); });
+  root.querySelector('#ins').onclick = () => instrumentSheet(() => go('settings'));
   root.querySelector('#rem').onclick = () => sheet(`<h1 style="font-size:22px">Remind me to sing</h1>
     <div class="col" style="gap:8px">${['07:30', '12:30', '18:00', '20:30'].map(t => `<button class="plan ${S.reminder === t ? 'on' : ''}" data-t="${t}"><span class="radio"></span><b>${t}</b></button>`).join('')}</div>
     <p class="small muted" id="remNote" style="text-align:center">${window.Capacitor ? 'Your phone will nudge you once a day.' : 'In the browser this is saved as a preference. The phone app sends the actual reminder.'}</p>
@@ -830,7 +862,9 @@ screens.settings = () => ({ html: `<div class="screen">
       bg.querySelectorAll('[data-t]').forEach(b => b.onclick = async () => { await M.setReminder(b.dataset.t); close(); go('settings'); });
       bg.querySelector('#off').onclick = async () => { await M.setReminder(null); close(); go('settings'); };
     });
-  root.querySelector('#pro').onclick = () => { if (S.pro) { S.pro = false; if (S.tol === 15) S.tol = 30; save(); go('settings'); } else go('paywall'); };
+  root.querySelector('#pro').onclick = () => { if (S.pro) { S.pro = false; if (S.tol === 15) S.tol = 30;
+    if (A.INSTRUMENTS[S.instrument] && A.INSTRUMENTS[S.instrument].pro) { S.instrument = 'voice'; A.state.instrument = 'voice'; }
+    save(); go('settings'); } else go('paywall'); };
   root.querySelector('#reset').onclick = () => sheet(`<h1 style="font-size:24px">Reset everything?</h1><p class="muted">This clears your streak, lesson progress, stats and voice range.</p><button class="btn primary" id="yes" style="background:var(--bad)">Reset</button><button class="btn ghost" id="no">Cancel</button>`, (bg, close) => { bg.querySelector('#no').onclick = close; bg.querySelector('#yes').onclick = () => { close(); reset(); go('welcome'); }; });
 }});
 
@@ -839,7 +873,7 @@ screens.paywall = () => ({ html: `<div class="screen" style="gap:14px">
   <div class="row" style="justify-content:flex-end"><button class="icon-btn" data-go="home" aria-label="Close">${I.x}</button></div>
   <div class="col" style="gap:10px"><span class="pro" style="align-self:flex-start;font-size:12px;padding:5px 10px">PRO</span><h1>From in tune to riffing clean</h1></div>
   <div class="col" style="gap:12px">
-    ${[['Chord lab.','Arpeggios, chord tones, and holding a line while the harmony moves.'],['Riffs and runs.','Melisma drills that speed up as you get cleaner.'],['Minor and chromatic.','Me, Le and Te. Every one of the twelve notes.'],['Vocal technique.','Vibrato and steady sustain, scored live.'],['Perfect mode.','The hole shrinks to ±15 cents, with full history.']].map(([b, t]) => `<div class="check">${I.check}<div><b>${b}</b> <span class="muted">${t}</span></div></div>`).join('')}
+    ${[['Chord lab.','Arpeggios, chord tones, and holding a line while the harmony moves.'],['Riffs and runs.','Melisma drills that speed up as you get cleaner.'],['Minor and chromatic.','Me, Le and Te. Every one of the twelve notes.'],['Rehearse with a band.','Piano, guitar, strings or organ instead of a plain tone.'],['Perfect mode.','The hole shrinks to ±15 cents, with full history.']].map(([b, t]) => `<div class="check">${I.check}<div><b>${b}</b> <span class="muted">${t}</span></div></div>`).join('')}
   </div>
   <div class="grow"></div>
   <div class="col" style="gap:10px" id="plans">
@@ -860,6 +894,7 @@ screens.paywall = () => ({ html: `<div class="screen" style="gap:14px">
 
 // ---------- boot ----------
 if (S.inputMode === 'touch') A.state.touchMode = true;
+A.state.instrument = S.pro && A.INSTRUMENTS[S.instrument] ? S.instrument : 'voice';
 go(S.onboarded ? 'home' : 'welcome');
 window.addEventListener('hashchange', () => { if (M.readChallenge() && S.onboarded) go('home'); });
 window.__pp = { go, S, A };
