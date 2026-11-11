@@ -1,9 +1,12 @@
 // Pitch Pass app shell: screens, navigation and flow.
 import * as A from './audio.js';
-import { S, save, reset, dayKey, streakNow, recordSession, recordHold, stats, weekBars } from './store.js';
+import { S, save, reset, dayKey, streakNow, recordSession, recordHold, stats, weekBars,
+         addMinutes, minutesToday, markStage, stagesToday, logRange } from './store.js';
 import { UNITS, STUDIO, TECHNIQUE, SOLF, SCALE, findLesson, dailyLesson, buildPhrases } from './content.js';
 import { Game } from './game.js';
-import { HoldDrill } from './drill.js';
+import { HoldDrill, SlideDrill } from './drill.js';
+import { WARMUPS, STAGES, liveCue, diagnose, healthNote, isWarm } from './coach.js';
+import * as M from './meta.js';
 import { ALLOW_PRO_PREVIEW, PRIVACY_URL } from './config.js';
 
 const app = document.getElementById('app');
@@ -34,6 +37,9 @@ const I = {
   wave:'<svg aria-hidden="true" width="40" height="16" viewBox="0 0 40 16" fill="none" stroke="#ff8a2a" stroke-width="2.2" stroke-linecap="round"><path d="M1 8c3-7 5-7 8 0s5 7 8 0 5-7 8 0 5 7 8 0 4-6 6-3"/></svg>',
   flat:'<svg aria-hidden="true" width="40" height="16" viewBox="0 0 40 16" fill="none" stroke="#ff8a2a" stroke-width="2.2" stroke-linecap="round"><path d="M1 8h38"/></svg>',
   slide:'<svg aria-hidden="true" width="40" height="16" viewBox="0 0 40 16" fill="none" stroke="#ff8a2a" stroke-width="2.2" stroke-linecap="round"><path d="M1 14h8C20 14 20 2 31 2h8"/></svg>',
+  share:'<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M8 7l4-4 4 4"/><path d="M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/></svg>',
+  badge:'<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="6"/><path d="M8.5 14L7 22l5-3 5 3-1.5-8"/></svg>',
+  lungs:'<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ff8a2a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9"/><path d="M12 12c0-3-2-4-4-3S4 13 4 17a3 3 0 0 0 4 2.8V12"/><path d="M12 12c0-3 2-4 4-3s4 4 4 8a3 3 0 0 1-4 2.8V12"/></svg>',
   leap:'<svg aria-hidden="true" width="40" height="16" viewBox="0 0 40 16" fill="none" stroke="#ff8a2a" stroke-width="2.2" stroke-linecap="round"><path d="M1 14h12M27 2h12M13 14l14-12"/></svg>',
 };
 const tabIcons = {
@@ -89,10 +95,31 @@ async function ensureInput(){
   return ok;
 }
 
-function startLesson(lesson){
+const screenFor = l => l.type === 'hold' ? 'drill' : l.type === 'slide' ? 'slide' : 'game';
+
+function startLesson(lesson, opts = {}){
   if (!lessonOpen(lesson)) return go('paywall');
   A.ctx();
-  ensureInput().then(() => go(lesson.type === 'hold' ? 'drill' : 'game', { lesson }));
+  // a coach does not let you run scales on a cold voice
+  const needsWarm = lesson.unit.id === 'studio' || lesson.unit.id === 'tech';
+  if (needsWarm && !isWarm(S.lastWarmup) && !opts.skipWarm) {
+    return sheet(`<h1 style="font-size:24px">Warm up first</h1><p class="muted" style="line-height:1.45">Runs and held notes on a cold voice is how people end up hoarse. Two minutes of trills and you will hit more of them anyway.</p>
+      <button class="btn primary" id="warm">Two minute warm-up</button><button class="btn ghost" id="skip">Skip it this once</button>`,
+      (bg, close) => {
+        bg.querySelector('#warm').onclick = () => { close(); go('session'); };
+        bg.querySelector('#skip').onclick = () => { close(); startLesson(lesson, { skipWarm: true }); };
+      });
+  }
+  ensureInput().then(() => go(screenFor(lesson), { lesson }));
+}
+
+// Minutes practised drive the daily goal and the vocal-health nudges.
+function timeSpent(startedAt){ const secs = (performance.now() - startedAt) / 1000; if (secs > 4) addMinutes(Math.min(secs, 900)); }
+function stageOf(lesson){
+  if (lesson.warmup) return 'warmup';
+  if (lesson.type === 'run') return 'agility';
+  if (lesson.type === 'hold') return 'control';
+  return 'ear';
 }
 
 // ---------- onboarding ----------
@@ -192,7 +219,7 @@ screens.range = (p = {}) => {
     const finish = () => {
       step = 'done';
       const base = baseFromRange(lo, hi);
-      S.range = { low: Math.round(lo), high: Math.round(hi) }; S.base = base; save();
+      S.range = { low: Math.round(lo), high: Math.round(hi) }; S.base = base; save(); logRange(lo, hi);
       $('#result').hidden = false;
       $('#resultText').innerHTML = `Your range: <b>${A.noteName(lo)}</b> to <b>${A.noteName(hi)}</b>. Lessons will start with Do on <b>${A.noteName(base)}</b>.`;
       $('#again').hidden = false; $('#ok').hidden = false;
@@ -229,38 +256,105 @@ screens.range = (p = {}) => {
 };
 
 // ---------- home ----------
+const ring = (pct, size, stroke, col) => {
+  const r = (size - stroke) / 2, cflen = 2 * Math.PI * r;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true" style="transform:rotate(-90deg)">
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="rgba(255,255,255,.1)" stroke-width="${stroke}"/>
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${col}" stroke-width="${stroke}" stroke-linecap="round"
+      stroke-dasharray="${cflen}" stroke-dashoffset="${cflen * (1 - pct)}"/></svg>`;
+};
+
 screens.home = () => {
   const today = dayKey(), dailyDone = S.daily === today, nx = nextUnit1(), st = streakNow();
-  const week = weekBars(), ws = stats(7);
+  const week = weekBars(), ws = stats(7), lv = M.level(), goal = M.goalState();
+  const done = stagesToday(), stageDone = STAGES.filter(x => done[x.key]).length;
+  const health = healthNote(minutesToday(), isWarm(S.lastWarmup));
+  const ch = M.readChallenge();
   const unitDone = UNITS[0].lessons.filter(l => S.done[l.id]).length;
-  const nxIdx = UNITS[0].lessons.indexOf(nx) + 1;
   return { html: `<div class="screen tabbed">
     <div class="row between">
-      <div class="col" style="gap:2px"><span class="muted small">${greet()}</span><span style="font-weight:800;font-size:26px;letter-spacing:-.02em">Ready to sing?</span></div>
-      <span class="chip" aria-label="${st} day streak">${I.flame}${st}</span>
+      <div class="col" style="gap:2px"><span class="muted small">${greet()}</span><span style="font-weight:800;font-size:26px;letter-spacing:-.02em">${st > 0 ? `Day ${st}` : 'Ready to sing?'}</span></div>
+      <div class="row" style="gap:8px">
+        <span class="chip" title="${st} day streak">${I.flame}${st}${S.streak.rest ? `<span class="rest" title="${S.streak.rest} rest day banked">+${S.streak.rest}</span>` : ''}</span>
+        <button class="icon-btn" data-go="badges" aria-label="Badges">${I.badge}</button>
+      </div>
     </div>
-    <button class="daily" id="daily">
-      <span class="w1"></span><span class="w2"></span>
-      <span class="eyebrow" style="color:var(--accent-ink)">Daily challenge</span>
-      <span class="col" style="gap:4px;max-width:230px"><span style="font-weight:800;font-size:26px;line-height:1.05;letter-spacing:-.02em">${dailyDone ? 'Done for today' : '10 walls, mixed notes'}</span><span style="font-size:14px;opacity:.8">${dailyDone ? 'Play again for practice. New set tomorrow.' : 'About 3 minutes. Keep your streak alive.'}</span></span>
-      <span class="play">${I.play} ${dailyDone ? 'Play again' : "Play today's set"}</span>
+
+    <button class="card row lvl" data-go="progress">
+      <div class="goal">${ring(goal.pct, 54, 6, goal.met ? 'var(--good)' : 'var(--accent)')}<span>${goal.met ? I.check : goal.mins}</span></div>
+      <div class="col grow" style="gap:5px">
+        <div class="row between"><b style="font-size:15px">Lv ${lv.level} · ${lv.rank}</b><span class="small muted">${goal.met ? 'Goal done' : `${goal.mins}/${goal.goal} min`}</span></div>
+        <span class="xpbar"><i style="width:${Math.round(lv.pct * 100)}%"></i></span>
+        <span class="small muted">${lv.need - lv.into} XP to level ${lv.level + 1}</span>
+      </div>
     </button>
-    <div class="col">
-      <span class="eyebrow">Continue</span>
-      <button class="item" id="cont" style="border:1px solid var(--line)">
-        <span class="badge" style="color:var(--accent);width:52px;height:52px;border-radius:16px">${nxIdx}</span>
-        <span class="col grow" style="gap:6px"><b>${esc(nx.title)}</b>
-          <span style="height:6px;border-radius:3px;background:var(--s2);display:block"><span style="display:block;width:${unitDone / UNITS[0].lessons.length * 100}%;height:6px;border-radius:3px;background:var(--accent)"></span></span>
-          <span class="sub">Unit 1 · ${unitDone} of ${UNITS[0].lessons.length} lessons done</span></span>${I.chev}
-      </button>
+
+    ${ch ? `<button class="card row challenge" id="chal"><div class="col grow" style="gap:2px"><b>A friend challenged you</b><span class="small muted">${esc(ch.title)} · beat ${ch.score.toLocaleString()}</span></div>${I.chev}</button>` : ''}
+
+    <button class="daily" id="session">
+      <span class="w1"></span><span class="w2"></span>
+      <span class="eyebrow" style="color:var(--accent-ink)">Today's session</span>
+      <span class="col" style="gap:4px;max-width:220px"><span style="font-weight:800;font-size:26px;line-height:1.05;letter-spacing:-.02em">${stageDone === 4 ? 'Session done' : stageDone ? `${4 - stageDone} stage${4 - stageDone > 1 ? 's' : ''} left` : 'Warm up, then sing'}</span><span style="font-size:14px;opacity:.82">${stageDone === 4 ? 'Come back tomorrow, or play a lesson for fun.' : 'Warm up, ear, agility, control. About 14 minutes.'}</span></span>
+      <span class="stagedots">${STAGES.map(x => `<i class="${done[x.key] ? 'on' : ''}"></i>`).join('')}</span>
+      <span class="play">${I.play} ${stageDone ? 'Continue' : 'Start session'}</span>
+    </button>
+
+    ${health ? `<div class="note ${health.kind === 'rest' ? 'warn' : ''}">${health.kind === 'warm' ? I.lungs : I.info}<div>${health.text}</div></div>` : ''}
+
+    <div class="grid2">
+      <button class="tile" id="daily"><span class="eyebrow">Daily challenge</span><b>${dailyDone ? 'Played today' : '10 mixed notes'}</b><span>${dailyDone ? 'New set tomorrow' : 'About 3 minutes'}</span></button>
+      <button class="tile" id="cont"><span class="eyebrow">Continue</span><b>${esc(nx.title)}</b><span>Unit 1 · ${unitDone} of ${UNITS[0].lessons.length} done</span></button>
     </div>
+
     <div class="card col" style="gap:10px">
       <div class="row between"><b style="font-size:16px">This week</b><span class="small muted">avg accuracy <b style="color:var(--ink)">${ws.acc == null ? '–' : ws.acc + '%'}</b></span></div>
-      <div class="bars">${week.map(d => `<div><i class="${d.today ? 'today' : ''}" style="height:${d.acc == null ? 6 : Math.max(10, d.acc * 0.7)}px;${d.acc == null && d.today ? 'background:var(--s2);border:1px dashed var(--accent)' : ''}"></i><span style="${d.today ? 'color:var(--ink);font-weight:700' : ''}">${d.label}</span></div>`).join('')}</div>
+      <div class="bars">${week.map(d => {
+        const col = d.acc == null ? '' : d.acc >= 85 ? 'background:var(--good)' : d.acc >= 70 ? 'background:#6f8ad8' : 'background:#4b3f70';
+        const empty = d.acc == null ? (d.today ? 'background:var(--s2);border:1px dashed var(--accent)' : 'background:var(--s2)') : '';
+        return `<div><b class="val">${d.acc == null ? '' : d.acc}</b><i style="height:${d.acc == null ? 6 : Math.max(12, d.acc * 0.62)}px;${col}${empty}"></i><span style="${d.today ? 'color:var(--ink);font-weight:700' : ''}">${d.label}</span></div>`;
+      }).join('')}</div>
     </div>
   </div>${tabbar('home')}`, mount(root){
+    root.querySelector('#session').onclick = () => go('session');
     root.querySelector('#daily').onclick = () => startLesson(dailyLesson(today));
     root.querySelector('#cont').onclick = () => startLesson(findLesson(nx.id));
+    const c = root.querySelector('#chal');
+    if (c) c.onclick = () => startLesson({ id: 'challenge', title: 'Challenge', sub: '10 notes', type: 'challenge',
+      notes: M.seededNotes(ch.seed, 10, SCALE), rival: ch, unit: { id: 'challenge', pro: false } });
+  }};
+};
+
+// ---------- today's session ----------
+screens.session = () => {
+  const done = stagesToday();
+  const warm = WARMUPS[new Date().getDate() % WARMUPS.length];
+  const pick = {
+    warmup: warm,
+    ear: findLesson(nextUnit1().id),
+    agility: S.pro ? (STUDIO.find(l => !S.done[l.id]) || STUDIO[0]) : findLesson('u1l5'),
+    control: S.pro ? (TECHNIQUE.find(t => !t.soon && !S.done[t.id]) || findLesson('tv')) : findLesson('u1l4'),
+  };
+  const next = STAGES.find(x => !done[x.key]);
+  return { html: `<div class="screen">
+    <div class="row"><button class="icon-btn" data-go="home" aria-label="Back">${I.back}</button><div class="col grow" style="gap:0"><b style="font-size:17px">Today's session</b><span class="small muted">${minutesToday()} min sung today</span></div></div>
+    <p class="lead" style="font-size:15px">Four stages, in this order. The order is the point: a warm voice learns faster and stays healthy.</p>
+    <div class="list">
+      ${STAGES.map((x, i) => {
+        const l = pick[x.key], isDone = !!done[x.key], isNext = next && next.key === x.key;
+        return `<button class="item ${isNext ? 'next' : ''}" data-stage="${x.key}">
+          <span class="badge ${isDone && !isNext ? 'done' : ''}">${isDone && !isNext ? I.check : isNext ? I.play : i + 1}</span>
+          <span class="col grow" style="gap:1px"><b>${x.title}</b><span class="sub">${esc(l ? l.title : x.sub)} · about ${x.mins} min</span></span>
+          ${isDone ? '<span class="end">done</span>' : ''}
+        </button>`;
+      }).join('')}
+    </div>
+    <div class="note">${I.lungs}<div>${esc(warm.cue)}</div></div>
+    <div class="grow"></div>
+    ${next ? `<button class="btn primary" id="go">Start ${next.title.toLowerCase()}</button>` : `<div class="card col" style="align-items:center;gap:6px"><b style="font-size:17px">Session complete</b><span class="small muted" style="text-align:center">That is the whole thing. Rest the voice now; it improves between sessions, not during them.</span></div><button class="btn secondary" data-go="home">Back home</button>`}
+  </div>`, mount(root){
+    const run = k => startLesson({ ...pick[k], unit: pick[k].unit || { id: 'warmup', pro: false } }, { skipWarm: k === 'warmup' });
+    root.querySelectorAll('[data-stage]').forEach(b => b.onclick = () => run(b.dataset.stage));
+    const g = root.querySelector('#go'); if (g) g.onclick = () => run(next.key);
   }};
 };
 
@@ -325,6 +419,7 @@ screens.game = ({ lesson }) => {
       <div class="tuner" id="tuner">Get ready</div>
       <div class="phase" id="phase"></div>
       <div class="toast" id="toast"></div>
+      <div class="cue" id="cue" hidden></div>
     </div>
     <div class="game-bottom">
       <button class="btn secondary" id="hear">${I.speaker} Hear again</button>
@@ -332,12 +427,21 @@ screens.game = ({ lesson }) => {
     </div>`, mount(root){
     const $ = s => root.querySelector(s);
     const segOf = i => Math.floor(i * segs / total);
+    const startedAt = performance.now();
+    let lastCue = null, cueT = 0;
+    const showCue = text => {
+      const el = $('#cue'); el.textContent = text; el.hidden = false;
+      clearTimeout(cueT); cueT = setTimeout(() => { el.hidden = true; }, 4200);
+    };
     let shown = 0;
     const countUp = target => { const el = $('#score'); const step = () => { shown = Math.min(target, shown + Math.max(5, Math.ceil((target - shown) / 6))); el.textContent = shown.toLocaleString(); if (shown < target) requestAnimationFrame(step); }; step(); };
     const g = new Game($('#cv'), {
       base: S.base, tol: S.tol, phrases, blind: !!lesson.blind,
       tunerEl: $('#tuner'), phaseEl: $('#phase'), toastEl: $('#toast'),
       onWall(i, info){
+        // the coach only speaks when the same mistake has become a pattern
+        const cue = liveCue(g.results, { rising: lesson.notes && lesson.notes[i] > (lesson.notes[i - 1] ?? -1) });
+        if (cue && cue.id !== lastCue) { lastCue = cue.id; showCue(cue.text); }
         const bars = $('#prog').children, k = segOf(i), kn = segOf(i + 1);
         if (bars[k]) bars[k].className = !info.hit ? 'miss' : !info.firstTry ? 'second' : info.grade === 'perfect' ? 'perfect' : 'hit';
         if (kn !== k && bars[kn]) bars[kn].className = 'now';
@@ -348,33 +452,34 @@ screens.game = ({ lesson }) => {
         const m = combo >= 10 ? 4 : combo >= 6 ? 3 : combo >= 3 ? 2 : 1, el = $('#combo');
         el.hidden = m < 2; if (m >= 2 && el.textContent !== `×${m} combo`) { el.textContent = `×${m} combo`; el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
       },
-      onEnd(results, extra){ go('results', { lesson, results, extra }); },
+      onEnd(results, extra){ timeSpent(startedAt); markStage(stageOf(lesson)); go('results', { lesson, results, extra }); },
     });
+    window.__pp.game = g;
     $('#hear').onclick = () => g.hearAgain();
     $('#pause').onclick = e => { g.pause(!g.paused); e.currentTarget.innerHTML = g.paused ? `${I.play} Resume` : `${I.pause} Pause`; $('#phase').textContent = g.paused ? 'Paused' : ''; };
-    $('#quit').onclick = () => go(lesson.unit.id === 'studio' ? 'studio' : lesson.id === 'daily' ? 'home' : 'lessons');
-    return () => g.destroy();
+    $('#quit').onclick = () => { timeSpent(startedAt); go(lesson.unit.id === 'studio' ? 'studio' : lesson.id === 'daily' ? 'home' : 'lessons'); };
+    return () => { clearTimeout(cueT); g.destroy(); };
   }};
 };
 
 // ---------- results ----------
 screens.results = ({ lesson, results, extra }) => {
+  const xpBefore = S.xp, lvBefore = M.level(xpBefore).level;
   const xp = Math.round(extra.score / 10);
   const r = recordSession(lesson.id, results, xp);
+  const lvAfter = M.level().level, levelled = lvAfter > lvBefore;
   const count = g => results.filter(w => w.grade === g).length;
   const perfect = count('perfect'), great = count('great'), good = count('good'), second = count('second'), missed = results.filter(w => !w.passed).length;
   const stars = r.acc >= 95 ? 3 : r.acc >= 80 ? 2 : r.acc >= 60 ? 1 : 0;
+  const badges = M.checkBadges({ passedAny: results.some(w => w.passed), bestCombo: extra.bestCombo, perfects: perfect, acc: r.acc, tries: r.tries, cleanRun: lesson.type === 'run' && r.acc === 100 });
   const bySemi = {};
   results.forEach(w => { const b = bySemi[w.semi] || (bySemi[w.semi] = { hits: 0, n: 0, c: [] }); b.n++; if (w.hit) b.hits++; if (w.heard && w.cents != null) b.c.push(w.cents); });
   const chips = Object.keys(bySemi).map(Number).sort((a, b) => a - b).map(s => { const b = bySemi[s]; const avg = b.c.length ? Math.round(b.c.reduce((x, y) => x + y, 0) / b.c.length) : null; return { s, miss: b.hits / b.n < 0.5, avg }; });
-  const worst = chips.filter(c => c.miss).sort((a, b) => Math.abs(b.avg || 999) - Math.abs(a.avg || 999))[0];
-  let tip = perfect >= results.length * 0.6 ? 'Mostly perfects. Try the Trained hole size in Settings to sharpen up further.' : 'Clean work. Aim for Perfect: land in the middle of the note within 8 cents.';
-  if (r.tries && results.filter(w => !w.heard).length > r.tries / 3) tip = 'Several walls went by without hearing you. Start singing as soon as the reference note stops and hold until the ring fills.';
-  else if (worst && worst.avg != null && Math.abs(worst.avg) <= S.tol) tip = `${SOLF[worst.s]} took a second try. You had the pitch, just lock it in before the wall reaches the ball.`;
-  else if (worst && worst.avg != null) tip = `${SOLF[worst.s]} gave you the most trouble: about ${Math.abs(worst.avg)} cents ${worst.avg > 0 ? 'sharp. Aim a little lower than feels right.' : 'flat. Lift it a little and keep your breath steady.'}`;
-  else if (Math.abs(r.cents) >= 15) tip = `Overall you sing ${r.cents > 0 ? 'sharp' : 'flat'} by about ${Math.abs(r.cents)} cents. ${r.cents > 0 ? 'Relax and aim slightly lower.' : 'Support the note and aim slightly higher.'}`;
-  const nx = lesson.id === 'daily' ? null : nextAfter(lesson.id);
+  const dx = diagnose(results, r, lesson);
+  const nx = lesson.id === 'daily' || lesson.id === 'challenge' ? null : nextAfter(lesson.id);
   const passed = r.acc >= 60;
+  const rival = lesson.rival;
+  const beat = rival && extra.score > rival.score;
   const star = on => `<svg aria-hidden="true" width="44" height="44" viewBox="0 0 24 24" fill="${on ? '#ffd166' : 'none'}" stroke="${on ? '#ffd166' : '#3a2f58'}" stroke-width="1.6" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg>`;
   return { html: `<div class="screen">
     <div class="col" style="align-items:center;gap:6px;text-align:center;margin-top:8px">
@@ -382,9 +487,10 @@ screens.results = ({ lesson, results, extra }) => {
       <h1 style="font-size:28px">${esc(lesson.title)}</h1>
       <div class="stars">${[0, 1, 2].map(i => `<span class="${i < stars ? 'on' : ''}" style="animation-delay:${0.25 + i * 0.25}s">${star(i < stars)}</span>`).join('')}</div>
     </div>
+    ${rival ? `<div class="note ${beat ? 'good' : ''}">${beat ? I.check : I.info}<div>${beat ? `You beat them by ${(extra.score - rival.score).toLocaleString()}. Send it back and make them try again.` : `They scored ${rival.score.toLocaleString()}. You need ${(rival.score - extra.score + 1).toLocaleString()} more.`}</div></div>` : ''}
     <div class="card col" style="align-items:center;gap:4px;padding:20px 0;border-radius:24px">
       <span class="big" id="bigScore">0</span>
-      <span class="muted" style="font-size:15px">${r.acc}% first try · best combo ${extra.bestCombo}</span>
+      <span class="muted" style="font-size:15px">${r.acc}% first try · best combo ${extra.bestCombo} · +${xp} XP</span>
       <div class="grades">
         <div><b style="color:#ffd166">${perfect}</b><span>Perfect</span></div>
         <div><b style="color:#5ee39b">${great}</b><span>Great</span></div>
@@ -393,26 +499,59 @@ screens.results = ({ lesson, results, extra }) => {
         <div><b style="color:#ff6b78">${missed}</b><span>Missed</span></div>
       </div>
     </div>
+    ${levelled ? `<div class="levelup"><b>Level ${lvAfter}</b><span>${M.level().rank}</span></div>` : ''}
     <div class="col"><span class="eyebrow">Note by note</span>
       <div class="notegrid">${chips.map(c => `<div class="${c.miss ? 'miss' : ''}"><b>${SOLF[c.s]}</b><span>${c.avg == null ? 'not heard' : (c.avg > 0 ? '+' : c.avg < 0 ? '−' : '') + Math.abs(c.avg) + 'c'}</span></div>`).join('')}</div>
     </div>
-    <div class="note">${r.cents > 0 ? I.up : I.down}<div>${tip}</div></div>
+    <div class="coach"><div class="row" style="gap:10px;align-items:flex-start">${I.lungs}<div class="col" style="gap:3px"><b>${esc(dx.title)}</b><span class="small muted" style="line-height:1.45">${esc(dx.text)}</span></div></div></div>
+    ${badgeStrip(badges)}
     <div class="grow"></div>
     <div class="col">
-      ${nx && passed ? `<button class="btn primary" id="next">Next: ${esc(nx.title)}</button><button class="btn ghost" id="again">Try again</button>`
-        : `<button class="btn primary" id="again">Try again</button><button class="btn ghost" data-go="${lesson.id === 'daily' ? 'home' : lesson.unit.id === 'studio' ? 'studio' : 'lessons'}">Done</button>`}
+      ${nx && passed ? `<button class="btn primary" id="next">Next: ${esc(nx.title)}</button>` : `<button class="btn primary" id="again">Try again</button>`}
+      <div class="row" style="gap:10px">
+        <button class="btn secondary" id="share">${I.share} Share</button>
+        ${nx && passed ? `<button class="btn secondary" id="again">Again</button>` : `<button class="btn secondary" data-go="${lesson.id === 'daily' || lesson.id === 'challenge' ? 'home' : lesson.unit.id === 'studio' ? 'studio' : 'lessons'}">Done</button>`}
+      </div>
     </div>
   </div>`, mount(root){
     const n = root.querySelector('#next'); if (n) n.onclick = () => startLesson(nx);
     root.querySelector('#again').onclick = () => startLesson(lesson);
+    root.querySelector('#share').onclick = () => shareSheet(lesson, extra, r, stars);
     const el = root.querySelector('#bigScore'); let v = 0; const target = extra.score;
     const tick = () => { v = Math.min(target, v + Math.max(7, Math.ceil(target / 45))); el.textContent = v.toLocaleString(); if (v < target) requestAnimationFrame(tick); };
     tick();
     for (let i = 0; i < stars; i++) setTimeout(() => { A.chime(72 + i * 4, i === 2 ? 'perfect' : 'great'); A.haptic(i === 2 ? 'perfect' : 'hit'); }, 300 + i * 250);
     if (!stars) A.blip('ok');
-    if (stars === 3) confetti(root);
+    if (stars === 3 || levelled) confetti(root);
   }};
 };
+
+// Sharing is the only way this app spreads, so the card is the game, not a stat block,
+// and the link sets the friend the exact same notes.
+function shareSheet(lesson, extra, r, stars){
+  const lv = M.level();
+  const card = M.shareCard({ title: lesson.title, score: extra.score, acc: r.acc, stars, streak: streakNow(), rank: 'Lv ' + lv.level });
+  const ch = M.makeChallenge(extra.score, lesson.title);
+  sheet(`<h1 style="font-size:22px">Send it</h1>
+    <img class="sharecard" alt="Your score card" src="${card.toDataURL('image/png')}">
+    <button class="btn primary" id="img">${I.share} Share the card</button>
+    <button class="btn secondary" id="link">Copy challenge link</button>
+    <p class="small muted" style="text-align:center;margin:-4px 0 0">The link gives them the same ten notes and your score to beat.</p>
+    <button class="btn ghost" id="close">Close</button>`, (bg, close) => {
+    bg.querySelector('#close').onclick = close;
+    bg.querySelector('#img').onclick = async () => {
+      const out = await M.shareScore(card, `${extra.score.toLocaleString()} on Pitch Pass. Beat it: ${ch.url}`);
+      const b = bg.querySelector('#img');
+      b.textContent = out === 'saved' ? 'Saved to your files' : out === 'shared' ? 'Sent' : out === 'cancelled' ? 'Share the card' : 'Could not share';
+    };
+    bg.querySelector('#link').onclick = async () => {
+      const b = bg.querySelector('#link');
+      try { await navigator.clipboard.writeText(ch.url); b.textContent = 'Link copied'; }
+      catch (e) { b.textContent = ch.url.length > 40 ? ch.url.slice(0, 37) + '…' : ch.url; }
+    };
+  });
+}
+
 function confetti(root){
   const cv = document.createElement('canvas'); cv.className = 'confetti'; root.appendChild(cv);
   const W = cv.width = root.clientWidth, H = cv.height = root.clientHeight, c = cv.getContext('2d');
@@ -423,6 +562,63 @@ function confetti(root){
     ps.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; p.r += dt * 6; c.save(); c.translate(p.x, p.y); c.rotate(p.r); c.fillStyle = p.col; c.fillRect(-p.w / 2, -2, p.w, 4); c.restore(); });
     if (now - t0 < 3500) requestAnimationFrame(f); else cv.remove(); };
   requestAnimationFrame(f);
+}
+
+// ---------- warm-up slides ----------
+screens.slide = ({ lesson }) => ({ html: `<div class="screen">
+    <div class="row">
+      <button class="icon-btn" id="quit" aria-label="Quit warm-up">${I.x}</button>
+      <div class="col grow" style="gap:0"><b style="font-size:15px">${esc(lesson.title)}</b><span class="small muted">${esc(lesson.sub)}</span></div>
+      <span class="chip" id="count">1 of ${lesson.slides.length}</span>
+    </div>
+    ${A.state.touchMode ? '<div class="banner" style="margin:0">Touch mode: drag up and down to follow the line.</div>' : ''}
+    <div class="drill-stage" style="height:300px"><canvas id="cv"></canvas><span class="status" id="status">Listen</span></div>
+    <div class="note">${I.lungs}<div>${esc(lesson.cue)}</div></div>
+    <div class="card col" style="gap:8px"><div class="row between"><b style="font-size:15px">On the line</b><b id="pct" style="font-size:22px">–</b></div><span class="small muted" id="verdict">Follow the dotted line up and back down in one connected sound.</span></div>
+    <div class="grow"></div>
+    <button class="btn secondary" id="hear">${I.speaker} Hear the sweep again</button>
+  </div>`, mount(root){
+    const $ = s => root.querySelector(s);
+    const startedAt = performance.now();
+    const d = new SlideDrill($('#cv'), {
+      base: S.base, slides: lesson.slides, secs: lesson.secs || 5, statusEl: $('#status'),
+      onSlide(r, i){
+        $('#count').textContent = `${Math.min(i + 2, lesson.slides.length)} of ${lesson.slides.length}`;
+        $('#pct').textContent = r.heard ? r.pct + '%' : '–';
+        $('#pct').style.color = r.pass ? 'var(--good)' : 'var(--warn)';
+        $('#verdict').textContent = !r.heard ? 'Barely heard that one. Keep the sound going the whole way up and down.'
+          : r.pass ? 'Connected and even. That is what a warm voice sounds like.'
+          : r.pct > 45 ? 'You lost the line in the middle. Slow the slide down and do not let the sound break.'
+          : 'Most of that was off the line. Start on the low note, then move without stopping.';
+      },
+      onEnd(results){ timeSpent(startedAt); markStage('warmup'); go('slideResults', { lesson, results }); },
+    });
+    window.__pp.drill = d;
+    $('#hear').onclick = () => d.replay();
+    $('#quit').onclick = () => { timeSpent(startedAt); go('session'); };
+    return () => d.destroy();
+  }});
+
+screens.slideResults = ({ lesson, results }) => {
+  const passed = results.filter(r => r.pass).length, total = results.length;
+  const avg = Math.round(results.reduce((s, r) => s + r.pct, 0) / Math.max(1, total));
+  const xp = passed * 25 + 25;
+  recordHold(lesson.id, passed, total, xp);
+  const badges = M.checkBadges({ passedAny: passed > 0 });
+  return { html: `<div class="screen">
+    <div class="col" style="align-items:center;gap:6px;text-align:center;margin-top:12px"><span class="eyebrow" style="color:var(--good)">Warm-up done</span><h1 style="font-size:30px">${esc(lesson.title)}</h1></div>
+    <div class="card col" style="align-items:center;gap:4px;padding:24px 0;border-radius:24px"><span class="big">${avg}<span style="font-size:36px;color:var(--muted)">%</span></span><span class="muted">on the line · ${passed} of ${total} clean · +${xp} XP</span></div>
+    <div class="note">${I.lungs}<div>Your voice is warm for the next 45 minutes. Good time to work on runs or held notes.</div></div>
+    ${badgeStrip(badges)}
+    <div class="grow"></div>
+    <div class="col"><button class="btn primary" data-go="session">Next stage</button><button class="btn ghost" id="again">Warm up again</button></div>
+  </div>`, mount(root){ root.querySelector('#again').onclick = () => startLesson(lesson, { skipWarm: true }); A.blip('big'); } };
+};
+
+function badgeStrip(badges){
+  if (!badges || !badges.length) return '';
+  return `<div class="col" style="gap:8px"><span class="eyebrow">New badge${badges.length > 1 ? 's' : ''}</span>
+    ${badges.map(b => `<div class="item" style="background:var(--s2)"><span class="badge" style="background:rgba(255,209,102,.16);color:#ffd166">${I.badge}</span><span class="col"><b>${b.title}</b><span class="sub">${b.hint}</span></span></div>`).join('')}</div>`;
 }
 
 // ---------- drills ----------
@@ -443,6 +639,7 @@ screens.drill = ({ lesson }) => {
     <button class="btn secondary" id="hear">${I.speaker} Hear the note again</button>
   </div>`, mount(root){
     const $ = s => root.querySelector(s);
+    const startedAt = performance.now();
     const d = new HoldDrill($('#cv'), {
       base: S.base, tol: S.tol, mode: lesson.mode, notes: lesson.notes, statusEl: $('#status'),
       onHold(r, i){
@@ -456,20 +653,23 @@ screens.drill = ({ lesson }) => {
           ? (r.rate < 4.5 ? 'The wobble is too slow or missing. Let it pulse a bit faster and more evenly.' : r.rate > 7.5 ? 'That wobble is fast and tight. Relax your throat and let it slow down.' : r.width < 20 ? 'Good speed, but it is too narrow. Let the pitch swing a little wider.' : r.width > 80 ? 'The swing is very wide. Keep it closer to the note.' : `Your centre drifted ${r.centre > 0 ? 'sharp' : 'flat'}. Keep the middle of the wave on the note.`)
           : (r.wobble > 15 ? 'Too much wobble. Keep the air steady and the note straight.' : Math.abs(r.drift) > 25 ? `The note ${r.drift > 0 ? 'crept up' : 'sagged'} as you held it. Keep your support all the way through.` : `You held it ${r.centre > 0 ? 'sharp' : 'flat'}. Match the reference before you settle.`);
       },
-      onEnd(results){ go('drillResults', { lesson, results }); },
+      onEnd(results){ timeSpent(startedAt); markStage('control'); go('drillResults', { lesson, results }); },
     });
+    window.__pp.drill = d;
     $('#hear').onclick = () => d.replay();
-    $('#quit').onclick = () => go('studio');
+    $('#quit').onclick = () => { timeSpent(startedAt); go('studio'); };
     return () => d.destroy();
   }};
 };
 screens.drillResults = ({ lesson, results }) => {
   const passed = results.filter(r => r.pass).length, total = results.length;
   const acc = recordHold(lesson.id, passed, total, passed * 20);
+  const badges = M.checkBadges({ passedAny: passed > 0, vibratoPasses: lesson.mode === 'vibrato' ? passed : 0 });
   return { html: `<div class="screen">
     <div class="col" style="align-items:center;gap:6px;text-align:center;margin-top:12px"><span class="eyebrow" style="color:${acc >= 60 ? 'var(--good)' : 'var(--warn)'}">${acc >= 60 ? 'Drill complete' : 'Keep practising'}</span><h1 style="font-size:30px">${esc(lesson.title)}</h1></div>
     <div class="card col" style="align-items:center;gap:4px;padding:24px 0;border-radius:24px"><span class="big">${passed}<span style="font-size:36px;color:var(--muted)">/${total}</span></span><span class="muted">holds passed · +${passed * 20} XP</span></div>
     <div class="list">${results.map((r, i) => `<div class="item"><span class="badge ${r.pass ? 'done' : ''}">${r.pass ? I.check : i + 1}</span><span class="col"><b>${SOLF[lesson.notes[i]]}</b><span class="sub">${!r.heard ? 'Not heard' : lesson.mode === 'vibrato' ? `${r.rate} Hz · ±${r.width}c · centre ${r.centre > 0 ? '+' : ''}${r.centre}c` : `wobble ${r.wobble}c · drift ${r.drift > 0 ? '+' : ''}${r.drift}c · centre ${r.centre > 0 ? '+' : ''}${r.centre}c`}</span></span></div>`).join('')}</div>
+    ${badgeStrip(badges)}
     <div class="grow"></div>
     <div class="col"><button class="btn primary" id="again">Try again</button><button class="btn ghost" data-go="studio">Done</button></div>
   </div>`, mount(root){ root.querySelector('#again').onclick = () => startLesson(lesson); A.blip(acc >= 60 ? 'big' : 'ok'); } };
@@ -500,6 +700,24 @@ screens.progress = (p = {}) => {
   </div>${tabbar('progress')}`, mount(root){ root.querySelector('#allTime').onclick = () => S.pro ? go('progress', { all: true }) : go('paywall'); } };
 };
 
+// ---------- badges ----------
+screens.badges = () => {
+  const lv = M.level(), ids = Object.keys(M.BADGES);
+  const got = ids.filter(id => S.badges[id]);
+  return { html: `<div class="screen">
+    <div class="row"><button class="icon-btn" data-go="home" aria-label="Back">${I.back}</button><h1 style="font-size:26px">Badges</h1></div>
+    <div class="card col" style="gap:6px">
+      <div class="row between"><b style="font-size:16px">Lv ${lv.level} · ${lv.rank}</b><span class="small muted">${S.xp.toLocaleString()} XP</span></div>
+      <span class="xpbar"><i style="width:${Math.round(lv.pct * 100)}%"></i></span>
+      <span class="small muted">${lv.need - lv.into} XP to level ${lv.level + 1}</span>
+    </div>
+    <div class="row between"><span class="eyebrow">Earned</span><span class="small muted">${got.length} of ${ids.length}</span></div>
+    <div class="grid2">${ids.map(id => { const b = M.BADGES[id], on = S.badges[id];
+      return `<div class="tile ${on ? '' : 'soon'}" style="${on ? 'border-color:rgba(255,209,102,.45)' : ''}">
+        <span style="color:${on ? '#ffd166' : 'var(--muted)'}">${I.badge}</span><b>${b.title}</b><span>${on ? 'Earned ' + on : b.hint}</span></div>`; }).join('')}</div>
+  </div>` };
+};
+
 // ---------- settings ----------
 screens.settings = () => ({ html: `<div class="screen">
   <div class="row"><button class="icon-btn" data-go="progress" aria-label="Back">${I.back}</button><h1 style="font-size:26px">Settings</h1></div>
@@ -512,6 +730,12 @@ screens.settings = () => ({ html: `<div class="screen">
   <div class="col"><span class="eyebrow">Input</span>
     <div class="seg" id="input"><button data-v="mic" class="${S.inputMode !== 'touch' ? 'on' : ''}">Microphone</button><button data-v="touch" class="${S.inputMode === 'touch' ? 'on' : ''}">Touch</button></div>
   </div>
+  <div class="col"><span class="eyebrow">Daily goal</span>
+    <div class="seg" id="goal">${[5, 10, 20].map(v => `<button data-v="${v}" class="${S.goalMin === v ? 'on' : ''}">${v} min<small>${v === 5 ? 'busy day' : v === 10 ? 'steady' : 'serious'}</small></button>`).join('')}</div>
+  </div>
+  <div class="col"><span class="eyebrow">Practice reminder</span>
+    <div class="card row between"><div class="col" style="gap:2px"><b>${S.reminder ? 'Every day at ' + S.reminder : 'Off'}</b><span class="small muted">${S.reminder ? 'A nudge on the days you forget' : 'Pick a time you are usually free'}</span></div><button class="chip" id="rem">${S.reminder ? 'Change' : 'Set'}</button></div>
+  </div>
   <div class="col"><span class="eyebrow">Pro</span>
     <div class="card row between"><div class="col" style="gap:2px"><b>${S.pro ? 'Pro preview is on' : 'Free plan'}</b><span class="small muted">${S.pro ? 'Testing only. Real purchases come with the store apps.' : 'Unlock Studio, units 2 to 4 and Perfect mode'}</span></div><button class="chip" id="pro">${S.pro ? 'Turn off' : 'See Pro'}</button></div>
   </div>
@@ -522,6 +746,14 @@ screens.settings = () => ({ html: `<div class="screen">
   root.querySelector('#redo').onclick = async () => { A.ctx(); const ok = S.inputMode === 'touch' ? false : await A.startMic(); go('range', { manual: !ok, fromSettings: true }); };
   root.querySelectorAll('#tol button').forEach(b => b.onclick = () => { const v = +b.dataset.v; if (v === 15 && !S.pro) return go('paywall'); S.tol = v; save(); go('settings'); });
   root.querySelectorAll('#input button').forEach(b => b.onclick = async () => { S.inputMode = b.dataset.v; save(); if (b.dataset.v === 'touch') { A.state.touchMode = true; } else { A.ctx(); const ok = await A.startMic(); A.state.touchMode = !ok; } go('settings'); });
+  root.querySelectorAll('#goal button').forEach(b => b.onclick = () => { S.goalMin = +b.dataset.v; save(); go('settings'); });
+  root.querySelector('#rem').onclick = () => sheet(`<h1 style="font-size:22px">Remind me to sing</h1>
+    <div class="col" style="gap:8px">${['07:30', '12:30', '18:00', '20:30'].map(t => `<button class="plan ${S.reminder === t ? 'on' : ''}" data-t="${t}"><span class="radio"></span><b>${t}</b></button>`).join('')}</div>
+    <p class="small muted" id="remNote" style="text-align:center">${window.Capacitor ? 'Your phone will nudge you once a day.' : 'In the browser this is saved as a preference. The phone app sends the actual reminder.'}</p>
+    <button class="btn ghost" id="off">Turn reminders off</button>`, (bg, close) => {
+      bg.querySelectorAll('[data-t]').forEach(b => b.onclick = async () => { await M.setReminder(b.dataset.t); close(); go('settings'); });
+      bg.querySelector('#off').onclick = async () => { await M.setReminder(null); close(); go('settings'); };
+    });
   root.querySelector('#pro').onclick = () => { if (S.pro) { S.pro = false; if (S.tol === 15) S.tol = 30; save(); go('settings'); } else go('paywall'); };
   root.querySelector('#reset').onclick = () => sheet(`<h1 style="font-size:24px">Reset everything?</h1><p class="muted">This clears your streak, lesson progress, stats and voice range.</p><button class="btn primary" id="yes" style="background:var(--bad)">Reset</button><button class="btn ghost" id="no">Cancel</button>`, (bg, close) => { bg.querySelector('#no').onclick = close; bg.querySelector('#yes').onclick = () => { close(); reset(); go('welcome'); }; });
 }});
@@ -553,4 +785,5 @@ screens.paywall = () => ({ html: `<div class="screen" style="gap:14px">
 // ---------- boot ----------
 if (S.inputMode === 'touch') A.state.touchMode = true;
 go(S.onboarded ? 'home' : 'welcome');
+window.addEventListener('hashchange', () => { if (M.readChallenge() && S.onboarded) go('home'); });
 window.__pp = { go, S, A };

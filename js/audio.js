@@ -1,4 +1,6 @@
 // Audio: reference tones, microphone, pitch detection.
+import { VoiceTracker, hzToMidi as _h2m } from './pitch.js';
+export { holdStats } from './pitch.js';
 export const NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 export const midiToHz = m => 440 * Math.pow(2, (m - 69) / 12);
 export const hzToMidi = f => 69 + 12 * Math.log2(f / 440);
@@ -91,7 +93,7 @@ export async function startMic(){
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
     const a = ctx();
     const src = a.createMediaStreamSource(stream);
-    analyser = a.createAnalyser(); analyser.fftSize = 2048;
+    analyser = a.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0;
     buf = new Float32Array(analyser.fftSize);
     src.connect(analyser);
     state.micOn = true; state.touchMode = false;
@@ -103,61 +105,27 @@ export async function startMic(){
   }
 }
 
-// Autocorrelation pitch detection for the singing range (70 to 1100 Hz).
-// Picks the earliest strong peak to avoid octave-down errors.
-export function detectPitch(){
-  if (!analyser || isPlaying()) return -1;
+// Pitch detection lives in pitch.js. This wraps it so screens just ask for a note.
+export const sampleRate = () => (ac ? ac.sampleRate : 48000);
+export function frame(){
+  if (!analyser || isPlaying()) return null;
   analyser.getFloatTimeDomainData(buf);
-  const sr = ac.sampleRate; let n = buf.length, rms = 0;
-  for (let i = 0; i < n; i++) rms += buf[i] * buf[i];
-  rms = Math.sqrt(rms / n);
-  if (rms < 0.01) return -1;
-  let r1 = 0, r2 = n - 1; const th = 0.2;
-  for (let i = 0; i < n / 2; i++) if (Math.abs(buf[i]) < th) { r1 = i; break; }
-  for (let i = 1; i < n / 2; i++) if (Math.abs(buf[n - i]) < th) { r2 = n - i; break; }
-  const b = buf.subarray(r1, r2); n = b.length;
-  const minLag = Math.floor(sr / 1100), maxLag = Math.min(n - 2, Math.ceil(sr / 70));
-  if (maxLag <= minLag + 2) return -1;
-  const c = new Float32Array(maxLag + 2);
-  for (let lag = 0; lag <= maxLag + 1; lag++) {
-    let s = 0; for (let j = 0; j < n - lag; j++) s += b[j] * b[j + lag]; c[lag] = s;
-  }
-  let d = 0; while (d < maxLag && c[d] > c[d + 1]) d++;
-  let best = -1;
-  for (let i = Math.max(d, minLag); i <= maxLag; i++) if (c[i] > best) best = c[i];
-  if (best < c[0] * 0.3) return -1;
-  let pos = -1;
-  for (let i = Math.max(d, minLag) + 1; i <= maxLag; i++) {
-    if (c[i] >= best * 0.9 && c[i] >= c[i - 1] && c[i] >= c[i + 1]) { pos = i; break; }
-  }
-  if (pos <= 0) return -1;
-  const x1 = c[pos - 1], x2 = c[pos], x3 = c[pos + 1];
-  const a2 = (x1 + x3 - 2 * x2) / 2, b2 = (x3 - x1) / 2;
-  const T0 = a2 ? pos - b2 / (2 * a2) : pos;
-  return sr / T0;
+  return buf;
 }
 
-// Smooths raw detections into a steady reading. fold: target midi to fold octaves toward.
+// Drop-in tracker used by the game and the drills.
 export class PitchTracker {
-  constructor(){ this.recent = []; this.value = null; this.at = 0; this.raw = null; this.frame = 0; }
+  constructor(){ this.v = new VoiceTracker(); }
   update(now, dt, fold, fast = false){
-    this.frame++;
-    if (state.micOn && (fast || this.frame % 2 === 0)) {
-      const f = detectPitch();
-      if (f > 0) {
-        let m = hzToMidi(f);
-        if (fold != null) { while (m - fold > 6) m -= 12; while (fold - m > 6) m += 12; }
-        this.recent.push(m); if (this.recent.length > (fast ? 3 : 5)) this.recent.shift();
-        this.raw = [...this.recent].sort((a, b) => a - b)[this.recent.length >> 1];
-        this.at = now;
-      } else if (now - this.at > 200) this.recent = [];
-    }
-    if (this.raw != null && this.live(now)) {
-      this.value = this.value == null ? this.raw : this.value + (this.raw - this.value) * Math.min(1, dt * (fast ? 24 : 14));
-    }
-    return this.live(now) ? this.value : null;
+    if (!state.micOn) { return this.v.live(now) ? this.v.smooth : null; }
+    const f = frame();
+    if (!f) { this.v.silentFor += dt; return this.v.live(now) ? this.v.smooth : null; }
+    return this.v.push(f, sampleRate(), now, dt, fold, fast);
   }
-  setTouch(m, now){ this.raw = m; this.at = now; }
-  live(now){ return this.raw != null && now - this.at < 300; }
-  reset(){ this.recent = []; this.value = null; this.raw = null; this.at = 0; }
+  setTouch(m, now){ this.v.setManual(m, now); }
+  live(now){ return this.v.live(now); }
+  reset(){ this.v.reset(); }
+  get raw(){ return this.v.midi; }
+  get clarity(){ return this.v.clarity; }
+  get at(){ return this.v.at; }
 }

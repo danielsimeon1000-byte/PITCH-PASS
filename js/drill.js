@@ -6,27 +6,15 @@ const HOLD = 4.0, REF = 1.2;
 
 export function analyse(samples, mode, tol){
   const s = samples.filter(x => x.t >= 0.6);
-  const heardFrac = s.length / Math.max(1, (HOLD - 0.6) * 30);
-  if (s.length < 20 || heardFrac < 0.35) return { heard: false, pass: false };
-  const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
-  const cs = s.map(x => x.c), centre = Math.round(mean(cs));
+  if (s.length < 20 || s.length / Math.max(1, (HOLD - 0.6) * 30) < 0.35) return { heard: false, pass: false };
+  const st = A.holdStats(s);
+  if (!st) return { heard: false, pass: false };
   if (mode === 'sustain') {
-    const sd = Math.sqrt(mean(cs.map(c => (c - centre) ** 2)));
-    const first = s.filter(x => x.t < 1.6).map(x => x.c), lastp = s.filter(x => x.t > HOLD - 1).map(x => x.c);
-    const drift = first.length && lastp.length ? Math.round(mean(lastp) - mean(first)) : 0;
-    const pass = Math.abs(centre) <= tol && sd <= 15 && Math.abs(drift) <= 25;
-    return { heard: true, pass, centre, wobble: Math.round(sd), drift };
+    const pass = Math.abs(st.centre) <= tol && st.sd <= 15 && Math.abs(st.drift) <= 25;
+    return { heard: true, pass, centre: st.centre, wobble: st.sd, drift: st.drift };
   }
-  // vibrato: remove the slow trend, then count oscillations
-  const trend = s.map((x, i) => { const w = s.filter(y => Math.abs(y.t - x.t) <= 0.13); return mean(w.map(y => y.c)); });
-  const osc = s.map((x, i) => x.c - trend[i]);
-  let crossings = 0, sign = 0;
-  osc.forEach(o => { const sg = o > 3 ? 1 : o < -3 ? -1 : 0; if (sg && sign && sg !== sign) crossings++; if (sg) sign = sg; });
-  const dur = s[s.length - 1].t - s[0].t;
-  const rate = Math.round(crossings / 2 / Math.max(0.5, dur) * 10) / 10;
-  const width = Math.round(mean(osc.map(Math.abs)) * Math.PI / 2);
-  const pass = Math.abs(centre) <= tol && rate >= 4.5 && rate <= 7.5 && width >= 20 && width <= 80;
-  return { heard: true, pass, centre, rate, width };
+  const pass = Math.abs(st.centre) <= tol && st.rate >= 4.5 && st.rate <= 7.5 && st.width >= 20 && st.width <= 80;
+  return { heard: true, pass, centre: st.centre, rate: st.rate, width: st.width };
 }
 
 export class HoldDrill {
@@ -108,5 +96,108 @@ export class HoldDrill {
     g.addColorStop(0, '#ffd2a3'); g.addColorStop(.35, '#ff9a3c'); g.addColorStop(1, '#e2620f');
     c.fillStyle = g; c.beginPath(); c.arc(bx, by, r, 0, 7); c.fill();
     c.fillStyle = 'rgba(94,227,155,.9)'; c.fillRect(x0, H - 8, xw * (this.phase === 'hold' ? Math.min(1, (performance.now() - this.holdStart) / 1000 / HOLD) : this.phase === 'result' ? 1 : 0), 4);
+  }
+}
+
+// Sirens and glides: a target line sweeps up and down, you follow it with your voice.
+// Scored on how much of the glide you stayed on the line, so it rewards a smooth
+// connected sound instead of a stepped one.
+const SLIDE_TOL = 90;   // cents: a glide is judged looser than a held note
+
+export class SlideDrill {
+  constructor(canvas, o){
+    this.cv = canvas; this.c = canvas.getContext('2d'); this.o = o;  // { base, slides, secs, statusEl, onSlide, onEnd }
+    this.tracker = new A.PitchTracker();
+    this.i = 0; this.results = []; this.phase = 'listen'; this.ended = false; this.samples = []; this.hitT = 0;
+    this.last = performance.now(); this.pointer = false;
+    this._resize = () => this.resize(); window.addEventListener('resize', this._resize);
+    this._down = e => { if (!A.state.touchMode) return; this.pointer = true; this.touch(e); };
+    this._move = e => { if (A.state.touchMode && this.pointer) this.touch(e); };
+    this._up = () => { this.pointer = false; };
+    canvas.addEventListener('pointerdown', this._down); canvas.addEventListener('pointermove', this._move); window.addEventListener('pointerup', this._up);
+    this.resize(); this.begin();
+    this.raf = requestAnimationFrame(t => this.frame(t));
+  }
+  destroy(){ this.ended = true; cancelAnimationFrame(this.raf); window.removeEventListener('resize', this._resize); window.removeEventListener('pointerup', this._up); this.cv.removeEventListener('pointerdown', this._down); this.cv.removeEventListener('pointermove', this._move); }
+  resize(){ const r = this.cv.getBoundingClientRect(); this.dpr = Math.min(2, window.devicePixelRatio || 1); this.W = r.width; this.H = r.height; this.cv.width = this.W * this.dpr; this.cv.height = this.H * this.dpr; this.c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); }
+  get pair(){ return this.o.slides[this.i]; }
+  get lo(){ return this.o.base + Math.min(...this.pair); }
+  get hi(){ return this.o.base + Math.max(...this.pair); }
+  get span(){ return Math.max(4, this.hi - this.lo); }
+  // target note at progress p (0..1): up then back down
+  target(p){ const tri = p < 0.5 ? p * 2 : (1 - p) * 2; return this.o.base + this.pair[0] + (this.pair[1] - this.pair[0]) * tri; }
+  y(m){ const pad = 2.5; const top = this.hi + pad, bot = this.lo - pad; return 16 + (top - m) / (top - bot) * (this.H - 32); }
+  touch(e){ const r = this.cv.getBoundingClientRect(); const pad = 2.5, top = this.hi + pad, bot = this.lo - pad; const m = top - ((e.clientY - r.top) - 16) / (this.H - 32) * (top - bot); this.tracker.setTouch(m, performance.now()); }
+  begin(){
+    this.samples = []; this.hitT = 0; this.phase = 'listen'; this.tracker.reset();
+    const d = A.playPhrase([this.o.base + this.pair[0], this.o.base + this.pair[1]], 0.42, 0.28);
+    this.phaseEnd = performance.now() + d * 1000 + 200;
+    this.status('Listen to the sweep');
+  }
+  replay(){ if (!this.ended && this.phase !== 'result') this.begin(); }
+  status(t){ if (this.o.statusEl) this.o.statusEl.textContent = t; }
+  frame(now){
+    if (this.ended) return;
+    const dt = Math.min(0.05, (now - this.last) / 1000); this.last = now;
+    const secs = this.o.secs || 5;
+    const v = this.tracker.update(now, dt, null, true);
+    if (this.phase === 'listen' && now > this.phaseEnd) { this.phase = 'wait'; this.status('Slide up and back down'); }
+    if (this.phase === 'wait' && v != null) { this.phase = 'go'; this.startT = now; }
+    if (this.phase === 'go') {
+      const t = (now - this.startT) / 1000, p = Math.min(1, t / secs);
+      const tgt = this.target(p);
+      if (v != null) {
+        const c = (v - tgt) * 100;
+        this.samples.push({ p, c, m: v });
+        if (Math.abs(c) <= SLIDE_TOL) this.hitT += dt;
+      }
+      this.status(`Sliding · ${Math.max(0, secs - t).toFixed(1)}s`);
+      if (t >= secs) {
+        const pct = Math.round(this.hitT / secs * 100);
+        const r = { pct, pass: pct >= 65, heard: this.samples.length > 10 };
+        this.results.push(r); this.phase = 'result'; this.phaseEnd = now + 2100;
+        A.blip(r.pass ? 'ok' : 'bad'); if (r.pass) A.haptic('hit');
+        this.o.onSlide && this.o.onSlide(r, this.i);
+      }
+    }
+    if (this.phase === 'result' && now > this.phaseEnd) {
+      this.i++;
+      if (this.i >= this.o.slides.length) { this.phase = 'done'; this.ended = true; this.o.onEnd && this.o.onEnd(this.results); return; }
+      this.begin();
+    }
+    this.draw(v);
+    this.raf = requestAnimationFrame(t => this.frame(t));
+  }
+  draw(v){
+    const c = this.c, W = this.W, H = this.H, secs = this.o.secs || 5;
+    c.clearRect(0, 0, W, H);
+    const x0 = 34, xw = W - x0 - 18;
+    // the line to follow, drawn as a thick soft band
+    c.lineJoin = 'round'; c.lineCap = 'round';
+    c.strokeStyle = 'rgba(255,138,42,.16)'; c.lineWidth = (SLIDE_TOL / 100) * ((H - 32) / (this.span + 5)) * 2;
+    c.beginPath();
+    for (let i = 0; i <= 60; i++) { const p = i / 60, x = x0 + p * xw, y = this.y(this.target(p)); i ? c.lineTo(x, y) : c.moveTo(x, y); }
+    c.stroke();
+    c.strokeStyle = 'rgba(255,138,42,.75)'; c.lineWidth = 2.5; c.setLineDash([5, 6]);
+    c.beginPath();
+    for (let i = 0; i <= 60; i++) { const p = i / 60, x = x0 + p * xw, y = this.y(this.target(p)); i ? c.lineTo(x, y) : c.moveTo(x, y); }
+    c.stroke(); c.setLineDash([]);
+    // your trace
+    if (this.samples.length > 1) {
+      c.strokeStyle = '#5ee39b'; c.lineWidth = 3.5; c.beginPath();
+      this.samples.forEach((s, i) => { const x = x0 + s.p * xw, y = this.y(s.m); i ? c.lineTo(x, y) : c.moveTo(x, y); });
+      c.stroke();
+    }
+    c.font = '700 11px "Bricolage Grotesque", sans-serif'; c.textBaseline = 'middle'; c.fillStyle = '#a99fb8';
+    c.fillText(A.noteName(this.hi), 6, this.y(this.hi));
+    c.fillText(A.noteName(this.lo), 6, this.y(this.lo));
+    let bx = x0, by = H / 2;
+    if (this.phase === 'go') bx = x0 + Math.min(1, (performance.now() - this.startT) / 1000 / secs) * xw;
+    else if (this.phase === 'result') bx = x0 + xw;
+    if (v != null) by = this.y(v); else if (this.samples.length) by = this.y(this.samples[this.samples.length - 1].m);
+    by = Math.max(10, Math.min(H - 10, by));
+    const r = 13, g = c.createRadialGradient(bx - 4, by - 4, 2, bx, by, r);
+    g.addColorStop(0, '#ffd2a3'); g.addColorStop(.35, '#ff9a3c'); g.addColorStop(1, '#e2620f');
+    c.fillStyle = g; c.beginPath(); c.arc(bx, by, r, 0, 7); c.fill();
   }
 }

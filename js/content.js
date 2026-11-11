@@ -4,6 +4,8 @@ export const SCALE = [0,2,4,5,7,9,11,12];
 
 // type: 'single' one wall per note with its own reference, 'run' fast row of walls,
 // 'melody' a phrase of walls at a steady pace, 'hold' vibrato or sustain drill.
+import { WARMUPS } from './coach.js';
+
 export const UNITS = [
   { id:'u1', title:'The major scale', pro:false, lessons:[
     { id:'u1l1', title:'Do, Re, Mi', sub:'8 walls', type:'single', notes:[0,2,4,2,0,4,2,0] },
@@ -40,7 +42,12 @@ export const TECHNIQUE = [
 ];
 
 export function allLessons(){
-  return [...UNITS.flatMap(u => u.lessons.map(l => ({ ...l, unit:u }))), ...STUDIO.map(l => ({ ...l, unit:{ id:'studio', pro:true, title:'Riffs and runs' } })), ...TECHNIQUE.filter(t => !t.soon).map(l => ({ ...l, unit:{ id:'tech', pro:true, title:'Vocal technique' } }))];
+  return [
+    ...WARMUPS.map(l => ({ ...l, warmup: true, unit: { id: 'warmup', pro: false, title: 'Warm up' } })),
+    ...UNITS.flatMap(u => u.lessons.map(l => ({ ...l, unit: u }))),
+    ...STUDIO.map(l => ({ ...l, unit: { id: 'studio', pro: true, title: 'Riffs and runs' } })),
+    ...TECHNIQUE.filter(t => !t.soon).map(l => ({ ...l, unit: { id: 'tech', pro: true, title: 'Vocal technique' } })),
+  ];
 }
 export const findLesson = id => allLessons().find(l => l.id === id);
 
@@ -64,6 +71,7 @@ export function buildPhrases(lesson){
     return notes.map(n => ({ kind:'single', notes:[n] }));
   }
   if (lesson.type === 'run') return lesson.phrases.map(p => ({ kind:'run', notes:p, gap: 60 / lesson.bpm * 0.5 }));
+  if (lesson.type === 'challenge') return lesson.notes.map(n => ({ kind:'single', notes:[n] }));
   if (lesson.type === 'melody') return lesson.phrases.map(p => ({ kind:'melody', notes:p, gap: lesson.gap }));
   return [];
 }
