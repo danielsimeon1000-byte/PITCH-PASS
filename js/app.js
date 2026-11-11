@@ -8,6 +8,13 @@ import { HoldDrill, SlideDrill, HarmonyDrill } from './drill.js';
 import { WARMUPS, STAGES, liveCue, diagnose, healthNote, isWarm } from './coach.js';
 import * as M from './meta.js';
 import { ALLOW_PRO_PREVIEW, PRIVACY_URL } from './config.js';
+import * as PRICE from './pricing.js';
+
+// Both lines below the plan list change with the plan, so they live together.
+const buyLabel = p => p.trial ? `Start ${p.trial}-day free trial` : `Get Pro · ${PRICE.money(p.amount)}`;
+const finePrint = p => p.trial
+  ? `Then ${PRICE.money(p.amount)} ${p.per}. Cancel anytime before the trial ends.`
+  : `${PRICE.money(p.amount)} ${p.per}. Cancel anytime.`;
 
 const app = document.getElementById('app');
 let cleanup = null;
@@ -875,16 +882,23 @@ screens.paywall = () => ({ html: `<div class="screen" style="gap:14px">
   <div class="col" style="gap:12px">
     ${[['Chord lab.','Arpeggios, chord tones, and holding a line while the harmony moves.'],['Riffs and runs.','Melisma drills that speed up as you get cleaner.'],['Minor and chromatic.','Me, Le and Te. Every one of the twelve notes.'],['Rehearse with a band.','Piano, guitar, strings or organ instead of a plain tone.'],['Perfect mode.','The hole shrinks to ±15 cents, with full history.']].map(([b, t]) => `<div class="check">${I.check}<div><b>${b}</b> <span class="muted">${t}</span></div></div>`).join('')}
   </div>
+  <p class="small muted" style="margin-top:-2px">${PRICE.region.worth}</p>
   <div class="grow"></div>
   <div class="col" style="gap:10px" id="plans">
-    <button class="plan on" data-plan="year"><span class="radio"></span><span class="col" style="gap:2px"><b>Yearly</b><span class="small muted">$49.99 a year · $4.17 a month, save 48%</span></span><span class="tag">BEST VALUE</span></button>
-    <button class="plan" data-plan="month"><span class="radio"></span><span class="col" style="gap:2px"><b>Monthly</b><span class="small muted">$7.99 a month</span></span></button>
+    ${PRICE.region.plans.map((p, i) => `<button class="plan${i ? '' : ' on'}" data-plan="${p.id}"><span class="radio"></span><span class="col" style="gap:2px"><b>${p.name}</b><span class="small muted">${PRICE.money(p.amount)} ${p.per}${p.note ? ` · ${p.note}` : ''}</span></span>${p.tag ? `<span class="tag">${p.tag}</span>` : ''}</button>`).join('')}
   </div>
-  <button class="btn primary" id="buy">Start 7-day free trial</button>
-  <p class="small muted" style="text-align:center;margin-top:-6px" id="fine">Then $49.99 a year. Cancel anytime before the trial ends.</p>
+  <button class="btn primary" id="buy">${buyLabel(PRICE.region.plans[0])}</button>
+  <p class="small muted" style="text-align:center;margin-top:-6px" id="fine">${finePrint(PRICE.region.plans[0])}</p>
+  ${PRICE.region.pay ? `<p class="small muted" style="text-align:center;margin-top:-4px;opacity:.72">${PRICE.region.pay}</p>` : ''}
 </div>`, mount(root){
-  let plan = 'year';
-  root.querySelectorAll('[data-plan]').forEach(b => b.onclick = () => { plan = b.dataset.plan; root.querySelectorAll('[data-plan]').forEach(x => x.classList.toggle('on', x === b)); root.querySelector('#fine').textContent = plan === 'year' ? 'Then $49.99 a year. Cancel anytime before the trial ends.' : 'Then $7.99 a month. Cancel anytime before the trial ends.'; });
+  let plan = PRICE.region.plans[0].id;
+  root.querySelectorAll('[data-plan]').forEach(b => b.onclick = () => {
+    plan = b.dataset.plan;
+    const p = PRICE.planById(plan);
+    root.querySelectorAll('[data-plan]').forEach(x => x.classList.toggle('on', x === b));
+    root.querySelector('#buy').textContent = buyLabel(p);
+    root.querySelector('#fine').textContent = finePrint(p);
+  });
   root.querySelector('#buy').onclick = () => {
     if (window.PitchPassBilling) return window.PitchPassBilling.purchase(plan).then(ok => { if (ok) { S.pro = true; save(); go('studio'); } });
     if (!ALLOW_PRO_PREVIEW) return sheet(`<h1 style="font-size:24px">Purchases aren't ready yet</h1><p class="muted">Pro will be available to buy in the next update.</p><button class="btn primary" id="no">OK</button>`, (bg, close) => { bg.querySelector('#no').onclick = close; });

@@ -69,7 +69,35 @@ Both stores require their own billing for digital subscriptions. The simplest ro
 1. Create the products in both stores:
    - `pitchpass_pro_monthly`: $7.99
    - `pitchpass_pro_yearly`: $49.99 with a 7-day free trial
-   - Set lower local prices per country (for example Nigeria) in each store's pricing screen.
+   - `pitchpass_pro_weekly`: Nigeria only for now (see below)
+   - Set lower local prices per country in each store's pricing screen.
+
+   **Nigeria pricing.** Enter these in the NGN row, do not let the store
+   auto-convert. At ~₦1,347/$ the converted yearly price is ₦67,000, which is not
+   a price in this market. The numbers below are what `js/pricing.js` renders, so
+   the two must stay in step:
+
+   | Product | NGN | ≈ USD |
+   | --- | --- | --- |
+   | `pitchpass_pro_yearly` | ₦19,900 | $14.77 |
+   | `pitchpass_pro_monthly` | ₦2,900 | $2.15 |
+   | `pitchpass_pro_weekly` | ₦900 | $0.67 |
+
+   How those were set: Spotify Individual is ₦1,600 a month in Nigeria and
+   education apps on the Nigerian App Store sit at ₦2,900–5,400, so yearly works
+   out to ₦1,658 a month — level with Spotify, which is what people here price
+   music against. All three use Apple's `X,900` convention for NGN, so they can be
+   typed straight in. Nigerian inflation ran 15.06% in early 2026; revisit these
+   once a year rather than letting them erode.
+
+   The weekly tier is not a filler. Nigerians buy data in weekly bundles
+   (₦500–₦1,000), and a Play free trial still demands a working card up front,
+   which is the point most naira cards fail. ₦900 is small enough to just try.
+
+   On Play, enable **Verve** and **MTN/Airtel carrier billing** for the Nigerian
+   listing. That is the single biggest conversion lever here: a naira card that
+   gets declined on foreign charges still goes through on a local Verve
+   transaction or straight off airtime.
 2. In RevenueCat, add both apps, create an entitlement called `pro`, and attach both products to an offering.
 3. Run `npm i @revenuecat/purchases-capacitor`, then `npx cap sync`.
 4. Add `js/billing.js`, which:
