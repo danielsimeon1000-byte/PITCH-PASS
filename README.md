@@ -4,16 +4,37 @@ Ear training game. The app plays a note (or a run), you sing it back, and your v
 
 **Play it:** https://danielsimeon1000-byte.github.io/PITCH-PASS/ (Chrome or Safari, allow the microphone)
 
-## What's in it
-- Onboarding: welcome, microphone permission, a sung voice range check that picks your key
-- Home: daily challenge, streak, continue lesson, weekly accuracy
-- Lessons: Unit 1 major scale (free); intervals, sharps and flats, melodies (Pro)
-- Vocal Studio (Pro): riffs and runs at rising tempos, vibrato drill (rate, width, centre), steady sustain drill
-- Results with per-note cents and a coaching tip, progress by note, sharp/flat tendency
-- Settings: redo range, hole size, mic or touch input, reset
-- Paywall ($7.99/month, $49.99/year), with a test-only Pro preview until store billing is wired up
+## Pitch detection
+`js/pitch.js` runs the McLeod Pitch Method over an FFT. It holds within a few cents
+from C2 to C5, survives a missing fundamental (what phone mics do to low voices),
+room noise and quiet singing, and returns a clarity score so "sang nothing" is told
+apart from "sang the wrong note". An octave-jump guard and a rolling noise floor sit
+on top. About 0.6 ms a frame.
+
+## The coach
+- Warm-ups: lip trill and hum sirens on a glide drill, five-tone scales, octave releases
+- A four stage daily session: warm up, ear, agility, control
+- Agility and held-note work is gated behind a warm-up, the way a teacher would
+- Live cues that only fire once a mistake repeats, never on a single slip
+- An end-of-lesson diagnosis that names one fix: drifting sharp, sagging support,
+  flat top notes, or the one note you keep missing
+- Vocal health limits: water at 25 minutes, stop at 45
+
+## The game
+Hear the note, sing it back. You have to hold it in tune for a quarter second (a ring
+fills around the ball) to open the wall. Miss and the wall stops dead at the ball and
+you get one more go against a countdown; miss again and it drops away. Hits are graded
+Perfect, Great or Good by how many cents off you were, with combo multipliers.
+
+## Progression
+XP and ranks, a daily goal ring, streaks with banked rest days, thirteen badges, a
+share card drawn from the game art, and challenge links that seed a friend the exact
+same notes and your score to beat.
 
 Everything runs on the device. Progress is saved locally; audio is never recorded.
+
+## Screens
+Designs: https://www.figma.com/design/M4KpvJyQYEMxT01defRm3X
 
 ## Project layout
 - `index.html`, `css/`, `js/`, `fonts/`, `icons/`: the app (no build step)

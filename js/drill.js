@@ -153,7 +153,7 @@ export class SlideDrill {
       }
       this.status(`Sliding · ${Math.max(0, secs - t).toFixed(1)}s`);
       if (t >= secs) {
-        const pct = Math.round(this.hitT / secs * 100);
+        const pct = Math.min(100, Math.round(this.hitT / secs * 100));
         const r = { pct, pass: pct >= 65, heard: this.samples.length > 10 };
         this.results.push(r); this.phase = 'result'; this.phaseEnd = now + 2100;
         A.blip(r.pass ? 'ok' : 'bad'); if (r.pass) A.haptic('hit');
