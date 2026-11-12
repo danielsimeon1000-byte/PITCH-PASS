@@ -22,6 +22,7 @@ const fresh = () => ({
   goalMin: 10,            // daily practice goal in minutes
   mins: {},               // day -> minutes sung
   lastWarmup: null,       // timestamp of the last finished warm-up
+  warmSkip: null,         // when the warm-up advice was last waved off
   xp: 0,
   history: [],            // { day, id, acc, hits, tries, cents }
   notes: {},              // semitone -> { hits, tries, cents, heard }

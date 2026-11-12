@@ -109,12 +109,16 @@ function startLesson(lesson, opts = {}){
   A.ctx();
   // a coach does not let you run scales on a cold voice
   const needsWarm = lesson.unit.id === 'studio' || lesson.unit.id === 'tech' || lesson.unit.id === 'chords';
-  if (needsWarm && !isWarm(S.lastWarmup) && !opts.skipWarm) {
+  // "Skip it this once" used to mean this one tap, so browsing four runs meant
+  // the same modal four times, which reads as the screen being broken rather
+  // than as advice. Skipping now stands for twenty minutes.
+  const skipped = S.warmSkip && Date.now() - S.warmSkip < 20 * 60 * 1000;
+  if (needsWarm && !isWarm(S.lastWarmup) && !opts.skipWarm && !skipped) {
     return sheet(`<h1 style="font-size:24px">Warm up first</h1><p class="muted" style="line-height:1.45">Runs and held notes on a cold voice is how people end up hoarse. Two minutes of trills and you will hit more of them anyway.</p>
       <button class="btn primary" id="warm">Two minute warm-up</button><button class="btn ghost" id="skip">Skip it this once</button>`,
       (bg, close) => {
         bg.querySelector('#warm').onclick = () => { close(); go('session'); };
-        bg.querySelector('#skip').onclick = () => { close(); startLesson(lesson, { skipWarm: true }); };
+        bg.querySelector('#skip').onclick = () => { close(); S.warmSkip = Date.now(); save(); startLesson(lesson, { skipWarm: true }); };
       });
   }
   ensureInput().then(() => go(screenFor(lesson), { lesson }));
@@ -1034,4 +1038,4 @@ if (S.inputMode === 'touch') A.state.touchMode = true;
 A.state.instrument = S.pro && A.INSTRUMENTS[S.instrument] ? S.instrument : 'voice';
 go(S.onboarded ? 'home' : 'welcome');
 window.addEventListener('hashchange', () => { if (M.readChallenge() && S.onboarded) go('home'); });
-window.__pp = { go, S, A, M, save, Game };   // handles for tests and the console
+window.__pp = { go, S, A, M, save, Game, findLesson, buildPhrases };   // handles for tests and the console

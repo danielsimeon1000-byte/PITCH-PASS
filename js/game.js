@@ -78,7 +78,16 @@ export class Game {
       const chord = p.chord ? p.chord.map(n => base + n) : null;
       const ref = chord ? A.playChord(chord, 1.5) : A.playPhrase(p.notes.map(n => base + n), g);
       const x0 = this.bx + speed * (ref + 1.3);
-      this.phrase = { kind: p.kind, speed, ww, gap: g, need: Math.min(0.15, g * 0.4), chord, chordName: p.chordName,
+      // A run is motion, and the test is whether the voice went through the note,
+      // not whether it parked on it: a melisma that parks is not a melisma. The
+      // detector also needs about 130ms to settle on any new pitch (a 42ms
+      // analysis window, a 3-frame median, then the smoothing), so on a 300ms
+      // note it can only ever report ~70ms of steady pitch even when the singer
+      // is dead on. Asking 40% of the note as unbroken lock meant a perfectly
+      // sung melisma scored 0 of 10. Runs ask for a brief real contact instead;
+      // melodies and arpeggios have the room to keep the sustained rule.
+      const need = p.kind === 'run' ? Math.max(0.05, Math.min(0.09, g * 0.25)) : Math.min(0.15, g * 0.4);
+      this.phrase = { kind: p.kind, speed, ww, gap: g, need, chord, chordName: p.chordName,
         walls: p.notes.map((n, i) => this.wall(base + n, n, x0 + i * speed * g, lab(i))) };
     }
     if (this.o.onPhrase) this.o.onPhrase(this.phrase);
@@ -228,8 +237,11 @@ export class Game {
         const c = (v - w.midi) * 100;
         if (w.best == null || Math.abs(c) < Math.abs(w.best)) w.best = Math.round(c);
         if (Math.abs(c) <= this.o.tol) { w.lock += dt; w.samples.push(c); }
-        else { w.lock = Math.max(0, w.lock - dt * 2); if (w.lock === 0) w.samples = []; }
-      } else if (near && v == null) w.lock = Math.max(0, w.lock - dt * 3);
+        // Decay is right for a held note: drift off it and you lose the hold. On
+        // a run it punished the singer for doing the exercise, since the voice
+        // is travelling by definition. There, contact accumulates instead.
+        else if (p.kind !== 'run') { w.lock = Math.max(0, w.lock - dt * 2); if (w.lock === 0) w.samples = []; }
+      } else if (near && v == null && p.kind !== 'run') w.lock = Math.max(0, w.lock - dt * 3);
       if (w.lock >= p.need) { this.pass(w); return; }
       if (p.kind === 'single') {
         if (w.state === 'approach' && w.x <= contact) { w.x = contact; this.block(w); }

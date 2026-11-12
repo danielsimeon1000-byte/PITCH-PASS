@@ -80,7 +80,7 @@ export const UNITS = [
 
 export const STUDIO = [
   { id:'sr1', title:'Turns', sub:'4 to 5 notes around one pitch', type:'run', bpm:70, phrases:[[4,5,4,2,4],[7,9,7,5,7],[2,4,2,0,2],[9,11,9,7,9]] },
-  { id:'sr2', title:'Pentatonic runs', sub:'6 notes, Sol La Sol Mi Re Do', type:'run', bpm:80, phrases:[[7,9,7,4,2,0],[12,9,7,4,2,0],[4,7,9,12,9,7],[9,7,4,7,4,2,0],[7,4,2,4,2,0]] },
+  { id:'sr2', title:'Pentatonic runs', sub:'The five-note scale, up and down', type:'run', bpm:80, phrases:[[7,9,7,4,2,0],[12,9,7,4,2,0],[4,7,9,12,9,7],[9,7,4,7,4,2,0],[7,4,2,4,2,0]] },
   { id:'sr3', title:'Gospel descents', sub:"Do' down to Do with passing notes", type:'run', bpm:90, phrases:[[12,11,9,7,9,7,4],[12,9,7,4,2,0],[11,9,7,5,4,2,0]] },
   { id:'sr4', title:'Melisma', sub:'10 notes on one vowel', type:'run', bpm:100, phrases:[[7,9,12,9,7,4,7,4,2,0],[4,7,9,7,4,2,4,2,0,2]] },
 ];
