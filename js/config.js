@@ -6,7 +6,7 @@ export const PRIVACY_URL = 'https://danielsimeon1000-byte.github.io/PITCH-PASS/p
 
 // Shown in Settings so a tester's bug report says which build they were on.
 // Bump this whenever you push something you want to tell apart.
-export const VERSION = '0.4.0';
+export const VERSION = '0.5.0';
 
 // Where "Report a problem" sends testers. A WhatsApp link works well here:
 // https://wa.me/234XXXXXXXXXX?text=Pitch%20Pass%20feedback%3A
