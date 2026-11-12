@@ -493,6 +493,7 @@ screens.game = ({ lesson }) => {
     const countUp = target => { const el = $('#score'); const step = () => { shown = Math.min(target, shown + Math.max(5, Math.ceil((target - shown) / 6))); el.textContent = shown.toLocaleString(); if (shown < target) requestAnimationFrame(step); }; step(); };
     const g = new Game($('#cv'), {
       base: S.base, tol: S.tol, phrases, blind: !!lesson.blind, syl: lesson.syl,
+      pace: M.wallPace(), runPace: M.runPace(),
       tunerEl: $('#tuner'), phaseEl: $('#phase'), toastEl: $('#toast'),
       onWall(i, info){
         // the coach only speaks when the same mistake has become a pattern
@@ -555,6 +556,7 @@ screens.first = () => ({ html: `<div class="game-top">
   const g = new Game($('#cv'), {
     base: S.base,
     tol: 110,                       // roughly a semitone either side: a beginner can hit this
+    pace: 1,                        // a demonstration, not a drill: never sped up
     phrases: [0, 4, 7].map((n, i) => ({ kind: 'single', notes: [n], labels: [['Do','Mi','Sol'][i]] })),
     tunerEl: $('#tuner'), phaseEl: $('#phase'), toastEl: $('#toast'),
     onWall(i){ const next = FIRST_STEPS[i + 1]; if (next) $('#coach').textContent = next; },
@@ -588,6 +590,10 @@ screens.results = ({ lesson, results, extra }) => {
   const count = g => results.filter(w => w.grade === g).length;
   const perfect = count('perfect'), great = count('great'), good = count('good'), second = count('second'), missed = results.filter(w => !w.passed).length;
   const stars = r.acc >= 95 ? 3 : r.acc >= 80 ? 2 : r.acc >= 60 ? 1 : 0;
+  // Pace moves on the lesson just sung, so the next one is already at the new
+  // speed. The banner below is the only place the singer is told, which is why
+  // it names the reason rather than just the number.
+  const paced = M.paceAfter(results);
   const badges = M.checkBadges({ passedAny: results.some(w => w.passed), bestCombo: extra.bestCombo, perfects: perfect, acc: r.acc, tries: r.tries, cleanRun: lesson.type === 'run' && r.acc === 100 });
   const bySemi = {};
   results.forEach(w => { const b = bySemi[w.semi] || (bySemi[w.semi] = { hits: 0, n: 0, c: [] }); b.n++; if (w.hit) b.hits++; if (w.heard && w.cents != null) b.c.push(w.cents); });
@@ -617,6 +623,7 @@ screens.results = ({ lesson, results, extra }) => {
       </div>
     </div>
     ${levelled ? `<div class="levelup"><b>Level ${lvAfter}</b><span>${M.level().rank}</span></div>` : ''}
+    ${paced ? `<div class="levelup pace${paced.up ? '' : ' down'}"><b>${paced.up ? 'Pace up' : 'Pace eased'} · ${esc(paced.label)}</b><span>${paced.up ? 'Walls come faster from here. You were first-try on almost all of that.' : 'Walls come a little slower while you find these again.'}</span></div>` : ''}
     <div class="col"><span class="eyebrow">Note by note</span>
       <div class="notegrid">${chips.map(c => `<div class="${c.miss ? 'miss' : ''}"><b>${solf(c.s, lesson.syl === 'flat' ? 'down' : 'up')}</b><span>${c.avg == null ? 'not heard' : (c.avg > 0 ? '+' : c.avg < 0 ? '−' : '') + Math.abs(c.avg) + 'c'}</span></div>`).join('')}</div>
     </div>
@@ -634,7 +641,8 @@ screens.results = ({ lesson, results, extra }) => {
     const n = root.querySelector('#next'); if (n) n.onclick = () => startLesson(nx);
     root.querySelector('#again').onclick = () => startLesson(lesson);
     root.querySelector('#share').onclick = () => shareSheet(lesson, extra, r, stars);
-    const el = root.querySelector('#bigScore'); let v = 0; const target = extra.score;
+    // A results screen that prints NaN is worse than one that prints 0.
+    const el = root.querySelector('#bigScore'); let v = 0; const target = Number(extra.score) || 0;
     const tick = () => { v = Math.min(target, v + Math.max(7, Math.ceil(target / 45))); el.textContent = v.toLocaleString(); if (v < target) requestAnimationFrame(tick); };
     tick();
     for (let i = 0; i < stars; i++) setTimeout(() => { A.chime(72 + i * 4, i === 2 ? 'perfect' : 'great'); A.haptic(i === 2 ? 'perfect' : 'hit'); }, 300 + i * 250);
@@ -935,6 +943,10 @@ screens.settings = () => ({ html: `<div class="screen">
   <div class="col"><span class="eyebrow">Input</span>
     <div class="seg" id="input"><button data-v="mic" class="${S.inputMode !== 'touch' ? 'on' : ''}">Microphone</button><button data-v="touch" class="${S.inputMode === 'touch' ? 'on' : ''}">Touch</button></div>
   </div>
+  <div class="col"><span class="eyebrow">Pace</span>
+    <div class="card row between"><div class="col" style="gap:2px"><b>${M.paceLabel()}</b><span class="small muted">${S.pace === 1 ? 'Moves up on its own after two clean lessons' : `Walls at ${Math.round(S.pace * 100)}% speed. Moves on its own as you improve.`}</span></div>
+      <div class="row" style="gap:6px"><button class="chip" id="slower">Slower</button><button class="chip" id="faster">Faster</button></div></div>
+  </div>
   <div class="col"><span class="eyebrow">Daily goal</span>
     <div class="seg" id="goal">${[5, 10, 20].map(v => `<button data-v="${v}" class="${S.goalMin === v ? 'on' : ''}">${v} min<small>${v === 5 ? 'busy day' : v === 10 ? 'steady' : 'serious'}</small></button>`).join('')}</div>
   </div>
@@ -973,6 +985,9 @@ screens.settings = () => ({ html: `<div class="screen">
   root.querySelector('#pro').onclick = () => { if (S.pro) { S.pro = false; if (S.tol === 15) S.tol = 30;
     if (A.INSTRUMENTS[S.instrument] && A.INSTRUMENTS[S.instrument].pro) { S.instrument = 'voice'; A.state.instrument = 'voice'; }
     save(); go('settings'); } else go('paywall'); };
+  const nudge = d => { S.pace = Math.max(M.PACE_MIN, Math.min(M.PACE_MAX, +(S.pace + d).toFixed(2))); S.paceWins = 0; save(); go('settings'); };
+  root.querySelector('#slower').onclick = () => nudge(-M.PACE_STEP);
+  root.querySelector('#faster').onclick = () => nudge(M.PACE_STEP);
   root.querySelector('#invite').onclick = async e => {
     const btn = e.currentTarget, r = await M.shareApp();
     if (r === 'copied' || r === 'failed') {
@@ -1019,4 +1034,4 @@ if (S.inputMode === 'touch') A.state.touchMode = true;
 A.state.instrument = S.pro && A.INSTRUMENTS[S.instrument] ? S.instrument : 'voice';
 go(S.onboarded ? 'home' : 'welcome');
 window.addEventListener('hashchange', () => { if (M.readChallenge() && S.onboarded) go('home'); });
-window.__pp = { go, S, A };
+window.__pp = { go, S, A, M, save, Game };   // handles for tests and the console

@@ -10,6 +10,11 @@ const fresh = () => ({
   range: null,            // { low, high } measured in onboarding
   rangeLog: [],           // { day, low, high } so growth is visible over months
   tol: 50,                // hole size in cents
+  // Tempo is the difficulty dial that still works once accuracy plateaus:
+  // finding the note is a different skill from finding it fast. 1 is the pace
+  // the exercises were written at; see paceAfter() in meta.js.
+  pace: 1,
+  paceWins: 0,            // consecutive clean sessions banked toward the next step up
   pro: false,
   inputMode: 'mic',
   instrument: 'voice',   // what the reference tones and the accompaniment sound like

@@ -181,3 +181,40 @@ export async function shareApp(){
   try { await navigator.clipboard.writeText(`${text}\n${url}`); return 'copied'; } catch (e) {}
   return 'failed';
 }
+
+// --- pace -----------------------------------------------------------------
+// A singer who nails Do-Mi-Sol at walking speed has not finished learning it;
+// they still have to find the note faster. Pace is the dial that keeps the
+// exercises honest after accuracy tops out.
+//
+// It climbs slowly and drops at once on purpose. Two clean sessions in a row
+// are needed to move up, because one good run is luck as often as skill. One
+// bad session drops it immediately, because a drill that outruns you stops
+// teaching and starts punishing, and nobody comes back to that.
+export const PACE_MIN = 0.8, PACE_MAX = 1.75, PACE_STEP = 0.12;
+const UP = 0.85, DOWN = 0.55, MIN_WALLS = 8, WINS_NEEDED = 2;
+
+export const paceLabel = (p = S.pace) =>
+  p < 0.95 ? 'Gentle' : p < 1.1 ? 'Steady' : p < 1.35 ? 'Brisk' : p < 1.6 ? 'Quick' : 'Sharp';
+
+// Runs and melodies feel the change less than single notes. At pace 1.75 a run
+// written at 96bpm would land at 168, which is a different exercise rather than
+// a harder one, so they move on the square root.
+export const wallPace = (p = S.pace) => p;
+export const runPace  = (p = S.pace) => Math.sqrt(p);
+
+export function paceAfter(results){
+  if (!Array.isArray(results) || results.length < MIN_WALLS) return null;
+  const clean = results.filter(w => w.hit).length / results.length;
+  const before = S.pace;
+  if (clean < DOWN) {
+    S.paceWins = 0;
+    S.pace = Math.max(PACE_MIN, +(S.pace - PACE_STEP).toFixed(2));
+  } else if (clean >= UP) {
+    S.paceWins = (S.paceWins || 0) + 1;
+    if (S.paceWins >= WINS_NEEDED) { S.paceWins = 0; S.pace = Math.min(PACE_MAX, +(S.pace + PACE_STEP).toFixed(2)); }
+  } else S.paceWins = 0;
+  save();
+  if (S.pace === before) return null;
+  return { from: before, to: S.pace, up: S.pace > before, label: paceLabel(S.pace) };
+}

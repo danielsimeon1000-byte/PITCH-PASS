@@ -185,6 +185,13 @@ h1.xl{font-size:40px;line-height:1.02;letter-spacing:-.035em}
 .levelup{display:flex;align-items:baseline;justify-content:center;gap:10px;padding:12px;border-radius:16px;background:rgba(255,209,102,.14);border:1px solid rgba(255,209,102,.4);animation:pop .4s cubic-bezier(.3,1.6,.5,1)}
 .levelup b{font-size:20px;color:#ffd166}
 .levelup span{font-size:14px;color:var(--muted)}
+/* The pace banner carries a sentence, not a rank, so it reads as a line of text
+   rather than two columns fighting over the width. */
+.levelup.pace{align-items:flex-start;flex-direction:column;gap:3px;text-align:left;
+  background:rgba(124,160,255,.12);border-color:rgba(124,160,255,.34)}
+.levelup.pace b{font-size:16px;color:#9fb8ff}
+.levelup.pace.down{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.14)}
+.levelup.pace.down b{color:var(--ink)}
 .cue{position:absolute;left:12px;right:12px;bottom:12px;padding:12px 14px;border-radius:14px;background:rgba(42,33,64,.94);border-left:3px solid var(--accent);font-size:14px;line-height:1.4;z-index:4;animation:cueIn .3s ease}
 @keyframes cueIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .sharecard{width:100%;border-radius:16px;display:block}

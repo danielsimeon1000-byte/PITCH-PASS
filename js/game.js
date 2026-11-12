@@ -4,6 +4,9 @@
 import * as A from './audio.js';
 import { SOLF, SCALE, solf } from './content.js';
 
+// TRAVEL and GATE_WAIT are the pace-1 figures; both are divided by o.pace at
+// use. TONE_LEN deliberately is not: pace should change how fast you must find
+// the note, not how much of it you were given to hear.
 const TONE_LEN = 1.1, TRAVEL = 3.6, LEAD = 0.75, LOCK = 0.25, GATE_WAIT = 4.2;
 const GRADES = {
   perfect: { label: 'PERFECT', color: '#ffd166', pts: 300 },
@@ -26,6 +29,9 @@ export class Game {
     this.paused = false; this.ended = false; this.ballY = 0; this.last = performance.now();
     this.chromatic = o.phrases.some(p => p.notes.some(n => !SCALE.includes(n)));
     this.pointer = false;
+    this.pace = Math.max(0.6, Math.min(2, o.pace || 1));
+    this.travel = TRAVEL / this.pace;
+    this.gateWait = GATE_WAIT / this.pace;
     this._resize = () => this.resize(); window.addEventListener('resize', this._resize);
     this._down = e => { if (!A.state.touchMode) return; this.pointer = true; this.touch(e); };
     this._move = e => { if (A.state.touchMode && this.pointer) this.touch(e); };
@@ -60,14 +66,14 @@ export class Game {
     const lab = i => (p.labels && p.labels[i]) || solf(p.notes[i], this.o.syl === 'flat' ? 'down' : 'up');
     // one wall, blocked on a miss: a plain note, or one note picked out of a chord
     if (p.kind === 'single' || p.kind === 'chordtone') {
-      const speed = (this.W + 50 - this.bx) / TRAVEL;
+      const speed = (this.W + 50 - this.bx) / this.travel;
       this.phrase = { kind: 'single', speed, ww: Math.min(78, this.W * 0.2), need: LOCK,
         chord: p.chord ? p.chord.map(n => base + n) : null, chordName: p.chordName, ask: p.ask, hideHole: p.hideHole,
         walls: [this.wall(base + p.notes[0], p.notes[0], this.W + 50, lab(0))] };
       if (p.chord) A.playChord(this.phrase.chord, 1.6);
       else A.playPhrase([base + p.notes[0]], TONE_LEN);
     } else {
-      const g = p.gap, speed = p.kind === 'run' ? Math.max(150, 64 / g) : 120;
+      const g = p.gap / (this.o.runPace || 1), speed = p.kind === 'run' ? Math.max(150, 64 / g) : 120;
       const ww = p.kind === 'run' ? Math.min(30, speed * g - 16) : Math.min(46, speed * g - 20);
       const chord = p.chord ? p.chord.map(n => base + n) : null;
       const ref = chord ? A.playChord(chord, 1.5) : A.playPhrase(p.notes.map(n => base + n), g);
@@ -184,7 +190,7 @@ export class Game {
       this.leaving = this.leaving.filter(p => p.walls.some(w => (w.state === 'fail' ? w.fade < 1 : w.x > -80)));
       if (this.o.phaseEl) {
         const t = this.active();
-        this.o.phaseEl.textContent = A.isPlaying() ? (fast ? 'Listen to the phrase' : 'Listen') : t && t.state === 'gate' ? `Hold it · ${Math.max(0, GATE_WAIT - t.gateT).toFixed(1)}s` : t ? 'Sing' : '';
+        this.o.phaseEl.textContent = A.isPlaying() ? (fast ? 'Listen to the phrase' : 'Listen') : t && t.state === 'gate' ? `Hold it · ${Math.max(0, this.gateWait - t.gateT).toFixed(1)}s` : t ? 'Sing' : '';
         this.o.phaseEl.style.color = t && t.state === 'gate' ? 'var(--bad)' : 'var(--good)';
       }
       if (this.o.tunerEl) {
@@ -227,7 +233,7 @@ export class Game {
       if (w.lock >= p.need) { this.pass(w); return; }
       if (p.kind === 'single') {
         if (w.state === 'approach' && w.x <= contact) { w.x = contact; this.block(w); }
-        else if (w.state === 'gate') { if (!A.isPlaying()) w.gateT += dt; if (w.gateT >= GATE_WAIT) this.fail(w); }
+        else if (w.state === 'gate') { if (!A.isPlaying()) w.gateT += dt; if (w.gateT >= this.gateWait) this.fail(w); }
       } else if (w.x < bx - p.ww / 2 - r) this.fail(w);
     });
     if (p.walls.every(w => w.done)) {
@@ -349,7 +355,7 @@ export class Game {
       c.fillRect(x, cy - half - lift * 0, ww, half * 2);
       if (w.state === 'gate' && w === this.active()) {
         // countdown bar on the wall
-        const left = Math.max(0, 1 - w.gateT / GATE_WAIT);
+        const left = Math.max(0, 1 - w.gateT / this.gateWait);
         c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(x + 6, cy - 3, ww - 12, 6);
         c.fillStyle = '#ff6b78'; c.fillRect(x + 6, cy - 3, (ww - 12) * left, 6);
       }
