@@ -168,3 +168,16 @@ export async function setReminder(hhmm){
     return 'scheduled';
   } catch (e) { return 'stored'; }
 }
+
+// --- inviting testers -----------------------------------------------------
+// Share the link, not a score card. Falls back to the clipboard on desktop and
+// on any browser without the share sheet.
+export async function shareApp(){
+  const url = location.origin + location.pathname;
+  const text = 'Pitch Pass: the app sings a note, you sing it back, and your voice moves the ball through the hole in the wall. Have a go and tell me what breaks.';
+  try {
+    if (navigator.share) { await navigator.share({ title: 'Pitch Pass', text, url }); return 'shared'; }
+  } catch (e) { if (e && e.name === 'AbortError') return 'cancelled'; }
+  try { await navigator.clipboard.writeText(`${text}\n${url}`); return 'copied'; } catch (e) {}
+  return 'failed';
+}

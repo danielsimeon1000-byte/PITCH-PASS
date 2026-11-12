@@ -2,7 +2,11 @@
 const KEY = 'pitchpass:v1';
 const fresh = () => ({
   onboarded: false,
-  base: 60,               // Do of the voice range, as midi
+  // G3. The picker pre-selects whatever this is, and C4 meant every new user was
+  // offered "most women and kids" before they had said anything about their voice.
+  // Mid is the one that is merely a bit off for everyone rather than unreachable
+  // for half of them.
+  base: 55,               // Do of the voice range, as midi
   range: null,            // { low, high } measured in onboarding
   rangeLog: [],           // { day, low, high } so growth is visible over months
   tol: 50,                // hole size in cents

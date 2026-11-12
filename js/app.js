@@ -7,7 +7,7 @@ import { Game } from './game.js';
 import { HoldDrill, SlideDrill, HarmonyDrill } from './drill.js';
 import { WARMUPS, STAGES, liveCue, diagnose, healthNote, isWarm } from './coach.js';
 import * as M from './meta.js';
-import { ALLOW_PRO_PREVIEW, PRIVACY_URL } from './config.js';
+import { ALLOW_PRO_PREVIEW, PRIVACY_URL, VERSION, FEEDBACK_URL } from './config.js';
 import * as PRICE from './pricing.js';
 
 // Both lines below the plan list change with the plan, so they live together.
@@ -167,7 +167,7 @@ screens.mic = () => ({ html: `<div class="screen">
   root.querySelector('#allow').onclick = async () => {
     A.ctx();
     const ok = await A.startMic();
-    if (ok) { S.inputMode = 'mic'; save(); go('range'); }
+    if (ok) { S.inputMode = 'mic'; save(); go('range', { manual: true }); }
     else root.querySelector('#micErr').hidden = false;
   };
   root.querySelector('#touch').onclick = () => { A.ctx(); A.state.touchMode = true; S.inputMode = 'touch'; save(); go('range', { manual: true }); };
@@ -189,7 +189,7 @@ screens.range = (p = {}) => {
   const fromSettings = !!p.fromSettings;
   if (manual) return { html: `<div class="screen">
     ${fromSettings ? `<div class="row"><button class="icon-btn" data-go="settings" aria-label="Back">${I.back}</button></div>` : '<div class="dots"><i class="on"></i><i class="on"></i><i class="on"></i></div>'}
-    <div class="col" style="gap:10px"><h1>Pick your range</h1><p class="lead">Choose where Do sits for your voice. You can run the singing check later in Settings.</p></div>
+    <div class="col" style="gap:10px"><h1>Where does your voice sit?</h1><p class="lead">A rough answer is fine. You can tune it exactly in a moment by singing.</p></div>
     <div class="col" style="gap:10px">
       ${RANGE_OPTS.map(o => `<button class="plan ${S.base === o.base ? 'on' : ''}" data-base="${o.base}"><span class="radio"></span><div class="col" style="gap:2px"><b>${o.label}</b><span class="small muted">${o.sub}${o.base === 48 ? ', most men' : o.base === 60 ? ', most women and kids' : ''}</span></div></button>`).join('')}
     </div>
@@ -197,7 +197,7 @@ screens.range = (p = {}) => {
     <button class="btn primary" id="done">Continue</button>
   </div>`, mount(root){
     root.querySelectorAll('[data-base]').forEach(b => b.onclick = () => { S.base = +b.dataset.base; save(); root.querySelectorAll('[data-base]').forEach(x => x.classList.toggle('on', x === b)); });
-    root.querySelector('#done').onclick = () => { S.onboarded = true; save(); go(fromSettings ? 'settings' : 'home'); };
+    root.querySelector('#done').onclick = () => { save(); go(fromSettings ? 'settings' : 'first'); };
   }};
 
   return { html: `<div class="screen">
@@ -217,10 +217,21 @@ screens.range = (p = {}) => {
       <button class="btn primary" id="ok" hidden>Looks right</button>
     </div>
     <button class="btn ghost" id="pick">Pick a range instead</button>
+    <button class="btn ghost" id="skipRange" style="margin-top:-8px">Not now</button>
   </div>`, mount(root){
     const $ = s => root.querySelector(s);
     const tr = new A.PitchTracker();
-    let step = 'low', voiced = [], lo = null, hi = null, raf, last = performance.now(), stepAt = performance.now();
+    // A range check that concludes inside a second is not measuring a voice, it is
+    // measuring whichever note happened to be sounding when the prompt appeared.
+    // The old one took the first 45 voiced frames, about three quarters of a
+    // second, so it settled your top note before you had drawn breath: a test
+    // voice singing C3 up to C5 was recorded as C3-F3, and Do was set to G2,
+    // below anything the singer had sung. Every lesson is pitched off this value.
+    // So: give the singer room to travel, count only pitches they actually hold,
+    // and conclude once they have stopped climbing.
+    const MIN_SING = 2.4, SETTLE = 1500, HOLD = 300, QUIET = 9000;
+    let step = 'low', lo = null, hi = null, raf, last = performance.now(), stepAt = performance.now();
+    let sung = 0, best = null, bestAt = performance.now(), run = null, tries = 0, quietFrom = performance.now();
     const LOW_M = 36, HIGH_M = 84;
     const yOf = m => Math.max(2, Math.min(92, (HIGH_M - m) / (HIGH_M - LOW_M) * 100));
     const finish = () => {
@@ -234,29 +245,57 @@ screens.range = (p = {}) => {
       $('#hint').textContent = '';
       const band = $('#band'); band.style.display = 'block'; band.style.top = yOf(hi) + '%'; band.style.bottom = (100 - yOf(lo)) + '%';
     };
+    const startStep = (which, now) => { step = which; sung = 0; best = null; bestAt = now; run = null; quietFrom = now; };
     const loop = now => {
       const dt = Math.min(0.05, (now - last) / 1000); last = now;
       const v = tr.update(now, dt, null, false);
+      const hunting = step === 'low' || step === 'high';
       if (v != null) {
         $('#now').textContent = A.noteName(v);
         $('#mball').style.top = `calc(${yOf(v)}% - 15px)`;
-        if (step === 'low' || step === 'high') {
-          voiced.push(v);
-          $('#hint').textContent = 'Hold it…';
-          if (voiced.length > 45) {
-            const sorted = [...voiced].sort((a, b) => a - b);
-            const val = sorted[Math.floor(sorted.length * (step === 'low' ? 0.2 : 0.8))];
-            if (step === 'low') { lo = val; $('#lo').textContent = A.noteName(lo); step = 'gap'; stepAt = now; voiced = []; $('#ask').textContent = 'Nice. Now slide up to your highest comfortable note and hold it.'; $('#hint').textContent = 'Breathe, then sing high'; }
-            else { hi = val; $('#hi').textContent = A.noteName(hi); if (hi - lo < 5) { step = 'high'; voiced = []; $('#ask').textContent = 'That was close to your low note. Try going higher.'; } else finish(); }
+        if (hunting) {
+          quietFrom = now; sung += dt;
+          // A pitch counts only once it has sat within a semitone for HOLD ms.
+          // A voice sweeping past a note on the way somewhere is not singing it.
+          if (!run || Math.abs(v - run.v) > 1) run = { v, at: now };
+          else run.v += (v - run.v) * 0.2;
+          if (now - run.at >= HOLD) {
+            const better = best == null || (step === 'low' ? run.v < best - 0.4 : run.v > best + 0.4);
+            if (better) { best = run.v; bestAt = now; $(step === 'low' ? '#lo' : '#hi').textContent = A.noteName(best); }
+          }
+          $('#hint').textContent = best == null ? 'Hold it…'
+            : (step === 'low' ? 'Lower if you can, or keep holding' : 'Higher if you can, or keep holding');
+          if (sung >= MIN_SING && best != null && now - bestAt >= SETTLE) {
+            if (step === 'low') {
+              lo = best; step = 'gap'; stepAt = now;
+              $('#ask').textContent = 'Nice. Now slide up to your highest comfortable note and hold it.';
+              $('#hint').textContent = 'Breathe, then sing high';
+            } else {
+              hi = best;
+              // Two honest attempts. Past that, take what the voice gave: a narrow
+              // range is a real answer, and trapping someone in a retry is not.
+              if (hi - lo < 5 && tries++ < 1) {
+                startStep('high', now);
+                $('#hi').textContent = '–';
+                $('#ask').textContent = 'That was close to your low note. Try going higher.';
+              } else finish();
+            }
           }
         }
-      } else if (step === 'low' || step === 'high') { if (voiced.length && voiced.length < 20) voiced = []; }
-      if (step === 'gap' && now - stepAt > 900) step = 'high';
+      } else if (hunting) {
+        if (run && now - run.at < HOLD) run = null;
+        if (now - quietFrom > QUIET) {
+          $('#hint').textContent = 'Not hearing anything yet';
+          $('#ask').textContent = 'Sing out loud on "ah". If the mic is not picking you up, pick a range instead.';
+        }
+      }
+      if (step === 'gap' && now - stepAt > 900) startStep('high', now);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
-    $('#again').onclick = () => { step = 'low'; voiced = []; lo = hi = null; ['#lo','#hi'].forEach(s => $(s).textContent = '–'); $('#result').hidden = true; $('#again').hidden = true; $('#ok').hidden = true; $('#band').style.display = 'none'; $('#ask').textContent = 'Sing "ah" as low as feels easy and hold it.'; };
+    $('#again').onclick = () => { lo = hi = null; tries = 0; startStep('low', performance.now()); ['#lo','#hi'].forEach(s => $(s).textContent = '–'); $('#result').hidden = true; $('#again').hidden = true; $('#ok').hidden = true; $('#band').style.display = 'none'; $('#ask').textContent = 'Sing "ah" as low as feels easy and hold it.'; };
     $('#ok').onclick = () => { S.onboarded = true; save(); go(fromSettings ? 'settings' : 'home'); };
+    $('#skipRange').onclick = () => { S.onboarded = true; save(); go('home'); };
     $('#pick').onclick = () => go('range', { manual: true, fromSettings });
     return () => cancelAnimationFrame(raf);
   }};
@@ -306,6 +345,7 @@ screens.home = () => {
       <span class="play">${I.play} ${stageDone ? 'Continue' : 'Start session'}</span>
     </button>
 
+    ${!S.range ? `<button class="note" id="tune" style="text-align:left;width:100%">${I.music}<div>Lessons are pitched on a rough guess right now. <b>Sing your range</b> and they will sit where your voice actually lives.</div></button>` : ''}
     ${health ? `<div class="note ${health.kind === 'rest' ? 'warn' : ''}">${health.kind === 'warm' ? I.lungs : I.info}<div>${health.text}</div></div>` : ''}
 
     <div class="grid2">
@@ -324,6 +364,7 @@ screens.home = () => {
   </div>${tabbar('home')}`, mount(root){
     root.querySelector('#session').onclick = () => go('session');
     root.querySelector('#daily').onclick = () => startLesson(dailyLesson(today));
+    const tune = root.querySelector('#tune'); if (tune) tune.onclick = () => go('range');
     root.querySelector('#cont').onclick = () => startLesson(findLesson(nx.id));
     const c = root.querySelector('#chal');
     if (c) c.onclick = () => startLesson({ id: 'challenge', title: 'Challenge', sub: '10 notes', type: 'challenge',
@@ -482,6 +523,59 @@ screens.game = ({ lesson }) => {
     return () => { clearTimeout(cueT); g.destroy(); };
   }};
 };
+
+// ---------- first note (onboarding) ----------
+// The welcome screen promises a ball going through a hole in a wall, and until
+// now the first thing a new user actually did was a sliding warm-up drill. The
+// hook has to come first, and it has to be winnable: three notes, a hole twice
+// the usual width, no score, no streak, no way to fail. Everything that grades
+// you starts after this.
+const FIRST_STEPS = [
+  'Listen first. The app sings a note, then the wall comes.',
+  'Now sing it back on "ah" and hold. Your voice is the ball.',
+  'Last one. Hold it steady and let the wall come to you.'
+];
+screens.first = () => ({ html: `<div class="game-top">
+    <span class="eyebrow" style="padding-left:4px">How it works</span>
+    <span class="grow"></span>
+    <button class="btn ghost" id="skip" style="height:36px;padding:0 12px;font-size:14px">Skip</button>
+  </div>
+  <div class="banner" id="coach">${esc(FIRST_STEPS[0])}</div>
+  <div class="stage">
+    <canvas id="cv"></canvas>
+    <div class="tuner" id="tuner">Get ready</div>
+    <div class="phase" id="phase"></div>
+    <div class="toast" id="toast"></div>
+  </div>
+  <div class="game-bottom">
+    <button class="btn secondary" id="hear">${I.speaker} Hear again</button>
+  </div>`, mount(root){
+  const $ = s => root.querySelector(s);
+  const done = () => { S.onboarded = true; save(); go('home', { fresh: true }); };
+  const g = new Game($('#cv'), {
+    base: S.base,
+    tol: 110,                       // roughly a semitone either side: a beginner can hit this
+    phrases: [0, 4, 7].map((n, i) => ({ kind: 'single', notes: [n], labels: [['Do','Mi','Sol'][i]] })),
+    tunerEl: $('#tuner'), phaseEl: $('#phase'), toastEl: $('#toast'),
+    onWall(i){ const next = FIRST_STEPS[i + 1]; if (next) $('#coach').textContent = next; },
+    onEnd(results){
+      const hit = results.filter(w => w.hit).length;
+      sheet(`<h1 style="font-size:24px">${hit ? 'That is the whole game' : 'That is the idea'}</h1>
+        <p class="muted" style="line-height:1.45">${hit
+          ? `You put ${hit === 1 ? 'one note' : `${hit} notes`} through. Lessons work exactly like that, with the holes narrower as you get better.`
+          : 'Sing the note back and hold it, and the ball lines up with the hole. The holes are wide while you are learning.'}</p>
+        <button class="btn primary" id="on">${hit ? 'Start training' : 'Try the first lesson'}</button>
+        <button class="btn ghost" id="redo">Run that again</button>`,
+        (bg, close) => {
+          bg.querySelector('#on').onclick = () => { close(); done(); };
+          bg.querySelector('#redo').onclick = () => { close(); go('first'); };
+        });
+    }
+  });
+  $('#hear').onclick = () => g.hearAgain();
+  $('#skip').onclick = () => done();
+  return () => g.destroy();
+}});
 
 // ---------- results ----------
 screens.results = ({ lesson, results, extra }) => {
@@ -853,6 +947,13 @@ screens.settings = () => ({ html: `<div class="screen">
   <div class="col"><span class="eyebrow">Pro</span>
     <div class="card row between"><div class="col" style="gap:2px"><b>${S.pro ? 'Pro preview is on' : 'Free plan'}</b><span class="small muted">${S.pro ? 'Testing only. Real purchases come with the store apps.' : 'Unlock Studio, units 2 to 4 and Perfect mode'}</span></div><button class="chip" id="pro">${S.pro ? 'Turn off' : 'See Pro'}</button></div>
   </div>
+  <div class="col"><span class="eyebrow">Testing</span>
+    <div class="card col" style="gap:12px">
+      <div class="row between"><div class="col" style="gap:2px"><b>Invite someone</b><span class="small muted">Sends the link to open it in a browser</span></div><button class="chip" id="invite">Share</button></div>
+      ${FEEDBACK_URL ? `<div class="row between"><div class="col" style="gap:2px"><b>Report a problem</b><span class="small muted">Say what you did and what happened</span></div><a class="chip" href="${FEEDBACK_URL}" target="_blank" rel="noopener">Open</a></div>` : ''}
+      <div class="row between"><span class="small muted">Build</span><span class="small muted">${esc(VERSION)}</span></div>
+    </div>
+  </div>
   <div class="grow"></div>
   <button class="btn ghost" id="reset" style="color:var(--bad)">Reset all progress</button>
   <p class="small muted" style="text-align:center">Pitch Pass reads your pitch on this device. Nothing is recorded or uploaded. <a href="${PRIVACY_URL}" target="_blank" rel="noopener">Privacy policy</a></p>
@@ -872,6 +973,13 @@ screens.settings = () => ({ html: `<div class="screen">
   root.querySelector('#pro').onclick = () => { if (S.pro) { S.pro = false; if (S.tol === 15) S.tol = 30;
     if (A.INSTRUMENTS[S.instrument] && A.INSTRUMENTS[S.instrument].pro) { S.instrument = 'voice'; A.state.instrument = 'voice'; }
     save(); go('settings'); } else go('paywall'); };
+  root.querySelector('#invite').onclick = async e => {
+    const btn = e.currentTarget, r = await M.shareApp();
+    if (r === 'copied' || r === 'failed') {
+      btn.textContent = r === 'copied' ? 'Copied' : 'No luck';
+      setTimeout(() => { btn.textContent = 'Share'; }, 1600);
+    }
+  };
   root.querySelector('#reset').onclick = () => sheet(`<h1 style="font-size:24px">Reset everything?</h1><p class="muted">This clears your streak, lesson progress, stats and voice range.</p><button class="btn primary" id="yes" style="background:var(--bad)">Reset</button><button class="btn ghost" id="no">Cancel</button>`, (bg, close) => { bg.querySelector('#no').onclick = close; bg.querySelector('#yes').onclick = () => { close(); reset(); go('welcome'); }; });
 }});
 
