@@ -38,6 +38,9 @@ export const CHORDS = {
   dom7: { name:'Dominant 7th',  tones:[0,4,7,10],  deg:['Root','3rd','5th','\u266d7th'] },
   maj7: { name:'Major 7th',     tones:[0,4,7,11],  deg:['Root','3rd','5th','7th'] },
   min7: { name:'Minor 7th',     tones:[0,3,7,10],  deg:['Root','\u266d3rd','5th','\u266d7th'] },
+  dom9: { name:'Dominant 9th',  tones:[0,4,7,10,14],  deg:['Root','3rd','5th','♭7th','9th'] },
+  min9: { name:'Minor 9th',     tones:[0,3,7,10,14],  deg:['Root','♭3rd','5th','♭7th','9th'] },
+  alt7: { name:'Altered 7th',   tones:[0,4,8,10,15],  deg:['Root','3rd','♯5th','♭7th','♯9th'] },
 };
 export const chordNotes = (id, root) => CHORDS[id].tones.map(t => t + root);
 export const chordName = (id, root) => `${CHORDS[id].name} on ${solf(root, 'up')}`;
@@ -86,6 +89,41 @@ export const STUDIO = [
 ];
 // Chord work. Arpeggios teach the shape, Find the tone teaches the ear to pick one
 // voice out of a stack, and the hold drills put a chord underneath you while you sing.
+
+// ---------------------------------------------------------------------------
+// Gospel. The hard part of this music is not range, it is that the ear has to
+// hold a tonal centre while the voice leaves it: blue notes that sit between
+// the piano's keys, runs that fall faster than you can name them, and a key
+// that moves under you. Spelled flat throughout, the way the idiom is written,
+// so the blue third reads Me and not Ri.
+export const GOSPEL = [
+  { id:'g1', title:'The blue third', sub:'Me against Mi, the inflection everything else sits on', bpm:66, type:'run', syl:'flat',
+    phrases:[[0,3,4,3,0],[4,3,4,0],[0,3,4,7,4,3],[7,4,3,4,0],[0,3,4,3,4,0]] },
+
+  { id:'g2', title:'Blues scale', sub:'Do Me Fa Se Sol Te, up and back', bpm:80, type:'run', syl:'flat',
+    phrases:[[0,3,5,6,7,10,12],[12,10,7,6,5,3,0],[0,3,5,6,5,3,0],[7,10,12,10,7,6,5],[12,10,7,5,6,5,3,0]] },
+
+  { id:'g3', title:'Cascades', sub:'Gospel runs fall. Start at the top and do not land early', bpm:108, type:'run', syl:'flat',
+    phrases:[[12,10,9,7,5,4,0],[12,11,10,9,7,6,5,3],[14,12,10,9,7,5,4],[12,10,9,7,6,5,3,0]] },
+
+  { id:'g4', title:'Drop and run', sub:'An octave down, then straight into the melisma', bpm:100, type:'run', syl:'flat',
+    phrases:[[12,0,2,3,4,2,0],[12,0,4,3,4,7,4],[14,2,4,5,7,5,4,2],[12,0,3,5,7,5,3,0]] },
+
+  { id:'g5', title:'Over the changes', sub:'Four phrases, four chords. Find the new home each time', bpm:92, type:'run', syl:'flat',
+    phrases:[[2,5,9,12,9,5],[7,11,14,11,7,5],[0,4,7,11,7,4],[9,12,14,12,9,7]] },
+
+  { id:'g6', title:'Upper tones', sub:'The 9th and the sharp 9th: what makes it gospel and not choir', type:'tone',
+    rounds:[['dom9',0,4],['min9',0,4],['dom9',0,3],['alt7',0,2],['min9',2,3],['dom9',5,2],['alt7',0,1]] },
+
+  { id:'g7', title:'The lift', sub:'The same shape half a step higher each time. Do stays put, so the names move under you', bpm:96, type:'run', syl:'sharp',
+    phrases:[[0,4,7,11,7,4],[1,5,8,12,8,5],[2,6,9,13,9,6],[3,7,10,14,10,7]] },
+
+  { id:'g8', title:'Full melisma', sub:'Sixteen notes, one breath, nothing to hold on to', bpm:120, type:'run', syl:'flat',
+    phrases:[[12,10,9,7,9,10,12,14,12,10,9,7,5,4,3,0],
+             [0,3,5,7,10,12,10,7,5,3,5,7,5,3,0,3],
+             [12,11,10,9,7,6,5,4,3,5,7,9,10,12,10,7]] },
+];
+
 export const CHORD_LAB = [
   { id:'ch1', title:'Triad arpeggios', sub:'Root, third, fifth and back', type:'arp', gap:0.62,
     rounds:[['maj',0],['min',0],['maj',5],['min',9],['maj',7]] },
@@ -118,6 +156,7 @@ export function allLessons(){
     ...WARMUPS.map(l => ({ ...l, warmup: true, unit: { id: 'warmup', pro: false, title: 'Warm up' } })),
     ...UNITS.flatMap(u => u.lessons.map(l => ({ ...l, unit: u }))),
     ...STUDIO.map(l => ({ ...l, unit: { id: 'studio', pro: true, title: 'Riffs and runs' } })),
+    ...GOSPEL.map(l => ({ ...l, unit: { id: 'gospel', pro: true, title: 'Gospel' } })),
     ...CHORD_LAB.map(l => ({ ...l, unit: { id: 'chords', pro: true, title: 'Chord lab' } })),
     ...TECHNIQUE.filter(t => !t.soon).map(l => ({ ...l, unit: { id: 'tech', pro: true, title: 'Vocal technique' } })),
   ];

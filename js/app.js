@@ -2,7 +2,7 @@
 import * as A from './audio.js';
 import { S, save, reset, dayKey, streakNow, recordSession, recordHold, stats, weekBars,
          addMinutes, minutesToday, markStage, stagesToday, logRange } from './store.js';
-import { UNITS, STUDIO, TECHNIQUE, CHORD_LAB, SOLF, SCALE, solf, findLesson, dailyLesson, buildPhrases } from './content.js';
+import { UNITS, STUDIO, GOSPEL, TECHNIQUE, CHORD_LAB, SOLF, SCALE, solf, findLesson, dailyLesson, buildPhrases } from './content.js';
 import { Game } from './game.js';
 import { HoldDrill, SlideDrill, HarmonyDrill } from './drill.js';
 import { WARMUPS, STAGES, liveCue, diagnose, healthNote, isWarm } from './coach.js';
@@ -88,7 +88,7 @@ function sheet(html, bind){
 const lessonOpen = l => !l.unit.pro || S.pro;
 function nextUnit1(){ const ls = UNITS[0].lessons; return ls.find(l => !S.done[l.id]) || ls[ls.length - 1]; }
 function nextAfter(id){
-  const seqs = [...UNITS.map(u => u.lessons.map(l => l.id)), STUDIO.map(l => l.id)];
+  const seqs = [...UNITS.map(u => u.lessons.map(l => l.id)), STUDIO.map(l => l.id), GOSPEL.map(l => l.id)];
   for (const s of seqs) { const i = s.indexOf(id); if (i >= 0 && i < s.length - 1) return findLesson(s[i + 1]); }
   return null;
 }
@@ -108,7 +108,7 @@ function startLesson(lesson, opts = {}){
   if (!lessonOpen(lesson)) return go('paywall');
   A.ctx();
   // a coach does not let you run scales on a cold voice
-  const needsWarm = lesson.unit.id === 'studio' || lesson.unit.id === 'tech' || lesson.unit.id === 'chords';
+  const needsWarm = ['studio', 'tech', 'chords', 'gospel'].includes(lesson.unit.id);
   // "Skip it this once" used to mean this one tap, so browsing four runs meant
   // the same modal four times, which reads as the screen being broken rather
   // than as advice. Skipping now stands for twenty minutes.
@@ -448,6 +448,11 @@ screens.studio = () => {
     <div class="list">${STUDIO.map((l, i) => { const done = S.done[l.id], next = l === firstOpen; return `<button class="item ${next ? 'next' : ''}" data-lesson="${l.id}">
       <span class="badge ${done && !next ? 'done' : ''}">${done && !next ? I.check : next ? I.play : i + 1}</span>
       <span class="col grow" style="gap:1px"><b>${esc(l.title)}</b><span class="sub">${done ? `Best ${S.best[l.id]}%` : esc(l.sub)}</span></span><span class="end" style="color:var(--accent-soft)">${l.bpm} bpm</span></button>`; }).join('')}</div>
+    <div class="row between" style="margin-top:6px"><b style="font-size:17px">Gospel</b><span class="small muted">${GOSPEL.filter(l => S.done[l.id]).length} of ${GOSPEL.length}</span></div>
+    <div class="list">${GOSPEL.map((l, i) => { const done = S.done[l.id]; return `<button class="item" data-lesson="${l.id}">
+      <span class="badge ${done ? 'done' : ''}">${done ? I.check : i + 1}</span>
+      <span class="col grow" style="gap:1px"><b>${esc(l.title)}</b><span class="sub">${done ? `Best ${S.best[l.id]}%` : esc(l.sub)}</span></span>
+      <span class="end" style="color:var(--accent-soft)">${l.bpm ? l.bpm + ' bpm' : 'ear'}</span></button>`; }).join('')}</div>
     <div class="row between" style="margin-top:6px"><b style="font-size:17px">Chord lab</b><span class="small muted">${CHORD_LAB.filter(l => S.done[l.id]).length} of ${CHORD_LAB.length}</span></div>
     <div class="list">${CHORD_LAB.map((l, i) => { const done = S.done[l.id]; return `<button class="item" data-lesson="${l.id}">
       <span class="badge ${done ? 'done' : ''}">${done ? I.check : i + 1}</span>
